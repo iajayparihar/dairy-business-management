@@ -4,7 +4,7 @@ import uuid
 from django.conf import settings
 from django.core.validators import RegexValidator
 from django.db import models
-
+from apps.common.models import SoftDeleteModel
 
 slug_validator = RegexValidator(
     regex=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -12,7 +12,7 @@ slug_validator = RegexValidator(
 )
 
 
-class Business(models.Model):
+class Business(SoftDeleteModel):
     """
     Represents an independent dairy business in the SaaS platform.
     """
@@ -64,7 +64,7 @@ class Business(models.Model):
         return self.name
 
 
-class BusinessMembership(models.Model):
+class BusinessMembership(SoftDeleteModel):
     """
     Connects a user to a business and defines their business-level role.
     """

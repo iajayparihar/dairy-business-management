@@ -59,6 +59,7 @@ own_apps = [
     "apps.payments.apps.PaymentsConfig",
     "apps.reports.apps.ReportsConfig",
     "apps.businesses.apps.BusinessesConfig",
+    "apps.suppliers.apps.SuppliersConfig",
 ]
 INSTALLED_APPS += own_apps
 
