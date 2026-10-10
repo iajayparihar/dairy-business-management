@@ -37,7 +37,20 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    
+    # Third-party applications
+    "rest_framework",
+    "corsheaders",
 ]
+own_apps = [
+    "apps.users.apps.UsersConfig",
+    "apps.customers.apps.CustomersConfig",
+    "apps.products.apps.ProductsConfig",
+    "apps.sales.apps.SalesConfig",
+    "apps.payments.apps.PaymentsConfig",
+    "apps.reports.apps.ReportsConfig",
+]
+INSTALLED_APPS += own_apps
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
