@@ -4,7 +4,9 @@ import uuid
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, F, Func, Value
+from django.contrib.postgres.constraints import ExclusionConstraint
+from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 
 from apps.businesses.models import Business
 from apps.common.models import SoftDeleteModel
@@ -178,6 +180,7 @@ class ProductPrice(SoftDeleteModel):
     class Meta:
         db_table = "products_product_price"
         ordering = ["-effective_from"]
+        
         constraints = [
             models.CheckConstraint(
                 condition=Q(unit_price__gte=0),
@@ -186,11 +189,30 @@ class ProductPrice(SoftDeleteModel):
             models.CheckConstraint(
                 condition=(
                     Q(effective_to__isnull=True)
-                    | Q(effective_to__gt=models.F("effective_from"))
+                    | Q(effective_to__gt=F("effective_from"))
                 ),
                 name="product_price_valid_period",
             ),
+            ExclusionConstraint(
+                name="exclude_overlapping_product_prices",
+                expressions=[
+                    ("business", RangeOperators.EQUAL),
+                    ("product", RangeOperators.EQUAL),
+                    ("price_type", RangeOperators.EQUAL),
+                    (
+                        Func(
+                            F("effective_from"),
+                            F("effective_to"),
+                            Value("[)"),
+                            function="TSTZRANGE",
+                            output_field=DateTimeRangeField(),
+                        ),
+                        RangeOperators.OVERLAPS,
+                    ),
+                ],
+            ),
         ]
+
         indexes = [
             models.Index(
                 fields=[
