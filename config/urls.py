@@ -23,4 +23,8 @@ urlpatterns = [
     path("api/v1/", include("apps.products.urls")),
     path("api/v1/", include("apps.customers.urls")),
     path("api/v1/", include("apps.suppliers.urls")),
+    path(
+    "api/v1/businesses/<uuid:business_id>/deliveries/",
+    include("apps.deliveries.urls"),
+),
 ]
