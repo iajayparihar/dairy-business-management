@@ -1,6 +1,7 @@
 
-from datetime import datetime, timezone as datetime_timezone
 from decimal import Decimal
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -13,6 +14,7 @@ from apps.deliveries.models import Delivery
 from apps.deliveries.services import create_delivery
 from apps.products.models import Product, ProductPrice
 
+IST = ZoneInfo("Asia/Kolkata")
 User = get_user_model()
 
 
@@ -48,7 +50,7 @@ class DeliveryServiceTests(TestCase):
             price_type=ProductPrice.PriceType.SELLING,
             unit_price=Decimal("50.00"),
             effective_from=datetime(
-                2026, 1, 1, tzinfo=datetime_timezone.utc
+                2026, 1, 1, tzinfo=IST
             ),
         )
 
@@ -57,9 +59,10 @@ class DeliveryServiceTests(TestCase):
             business_id=self.business.pk,
             customer_id=self.customer.pk,
             product_id=self.product.pk,
-            delivery_date=datetime(
-                2026, 1, 10
-            ).date(),
+            delivered_at=datetime(
+                2026, 10, 12, 12, 59,
+                tzinfo=IST,
+            ),
             quantity=Decimal("2.000"),
             user=self.user,
         )
@@ -73,7 +76,7 @@ class DeliveryServiceTests(TestCase):
             product=self.product,
         ).update(
             effective_to=datetime(
-                2026, 1, 15, tzinfo=datetime_timezone.utc
+                2026, 1, 15, tzinfo=IST
             )
         )
 
@@ -83,7 +86,7 @@ class DeliveryServiceTests(TestCase):
             price_type=ProductPrice.PriceType.SELLING,
             unit_price=Decimal("55.00"),
             effective_from=datetime(
-                2026, 1, 15, tzinfo=datetime_timezone.utc
+                2026, 1, 15, tzinfo=IST
             ),
         )
 
@@ -91,9 +94,9 @@ class DeliveryServiceTests(TestCase):
             business_id=self.business.pk,
             customer_id=self.customer.pk,
             product_id=self.product.pk,
-            delivery_date=datetime(
-                2026, 1, 20
-            ).date(),
+            delivered_at=datetime(
+                2026, 1, 20, tzinfo=IST
+            ),
             quantity=Decimal("2.000"),
             user=self.user,
         )
@@ -107,9 +110,9 @@ class DeliveryServiceTests(TestCase):
                 business_id=self.business.pk,
                 customer_id=self.customer.pk,
                 product_id=self.product.pk,
-                delivery_date=datetime(
-                    2025, 12, 1
-                ).date(),
+                delivered_at=datetime(
+                    2025, 12, 1, tzinfo=IST
+                ),
                 quantity=Decimal("1.000"),
                 user=self.user,
             )
@@ -128,14 +131,14 @@ class DeliveryServiceTests(TestCase):
             name="Foreign Customer",
         )
 
-        with self.assertRaises(Customer.DoesNotExist):
+        with self.assertRaises(ValidationError):
             create_delivery(
                 business_id=self.business.pk,
                 customer_id=other_customer.pk,
                 product_id=self.product.pk,
-                delivery_date=datetime(
-                    2026, 1, 10
-                ).date(),
+                delivered_at=datetime(
+                    2026, 1, 10, tzinfo=IST
+                ),
                 quantity=Decimal("1.000"),
                 user=self.user,
             )

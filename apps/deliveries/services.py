@@ -1,12 +1,11 @@
 
-from datetime import datetime, time
-from decimal import Decimal
-from zoneinfo import ZoneInfo
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.utils import timezone
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.businesses.models import Business
 from apps.businesses.services import require_business_membership
@@ -21,104 +20,156 @@ def create_delivery(
     business_id,
     customer_id,
     product_id,
-    delivery_date,
+    delivered_at,
     quantity,
     user,
     notes="",
 ):
     """
     Create a delivery using the selling price effective at the
-    start of the delivery's local business date.
+    exact delivery timestamp.
 
-    The client cannot choose the unit price or line total.
+    The timestamp must be timezone-aware. Django's configured
+    timezone is used for local-time interpretation.
+
+    The client cannot choose unit_price or line_total.
+    The selected unit price is saved as a historical snapshot.
     """
 
-    # Verify that the caller is an active member of this business.
+    # 1. Verify business membership.
     require_business_membership(
         user=user,
         business_id=business_id,
     )
 
-    business = Business.objects.get(
-        pk=business_id,
-        is_active=True,
+    # 2. Validate the delivery timestamp.
+    if not isinstance(delivered_at, datetime):
+        raise ValidationError({
+            "delivered_at": "A valid delivery timestamp is required."
+        })
+
+    if not timezone.is_aware(delivered_at):
+        raise ValidationError({
+            "delivered_at": (
+                "The delivery timestamp must include timezone information."
+            )
+        })
+
+    # Normalize the timestamp to Django's configured timezone.
+    delivered_at = delivered_at.astimezone(
+        timezone.get_current_timezone()
     )
 
-    # Lock the related records while creating the delivery.
-    customer = Customer.objects.select_for_update().get(
-        pk=customer_id,
-        business=business,
-        is_active=True,
-    )
+    # Derive the business date from the exact timestamp.
+    delivery_date = delivered_at.date()
 
-    product = Product.objects.select_for_update().get(
-        pk=product_id,
-        business=business,
-        is_active=True,
-    )
-
-    if quantity is None:
-        raise ValidationError({"quantity": "Quantity is required."})
-
-    quantity = Decimal(str(quantity))
-
-    if not quantity.is_finite() or quantity <= 0:
-        raise ValidationError(
-            {"quantity": "Quantity must be greater than zero."}
-        )
-
-    if not product.unit:
-        raise ValidationError(
-            {"product": "The product must have a valid unit."}
-        )
-
-    # Delivery dates are interpreted in the business's timezone.
+    # 3. Load the active business.
     try:
-        business_tz = ZoneInfo(business.timezone)
-    except Exception as exc:
-        raise ValidationError(
-            {"business": "The business timezone is invalid."}
-        ) from exc
+        business = Business.objects.get(
+            pk=business_id,
+            is_active=True,
+            is_deleted=False,
+        )
+    except Business.DoesNotExist as exc:
+        raise ValidationError({
+            "business": "The business does not exist or is inactive."
+        }) from exc
 
-    local_start = datetime.combine(delivery_date, time.min)
-    effective_at = timezone.make_aware(
-        local_start,
-        business_tz,
-    )
+    # 4. Lock and validate the customer.
+    try:
+        customer = Customer.objects.select_for_update().get(
+            pk=customer_id,
+            business=business,
+            is_active=True,
+            is_deleted=False,
+        )
+    except Customer.DoesNotExist as exc:
+        raise ValidationError({
+            "customer": (
+                "The customer does not exist, is inactive, "
+                "or belongs to another business."
+            )
+        }) from exc
 
-    # Select the most recent selling price that was effective
-    # at the start of this local business date.
+    # 5. Lock and validate the product.
+    try:
+        product = Product.objects.select_for_update().get(
+            pk=product_id,
+            business=business,
+            is_active=True,
+            is_deleted=False,
+        )
+    except Product.DoesNotExist as exc:
+        raise ValidationError({
+            "product": (
+                "The product does not exist, is inactive, "
+                "or belongs to another business."
+            )
+        }) from exc
+
+    # 6. Validate quantity.
+    if quantity is None:
+        raise ValidationError({
+            "quantity": "Quantity is required."
+        })
+
+    try:
+        quantity = Decimal(str(quantity))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValidationError({
+            "quantity": "Enter a valid decimal quantity."
+        }) from exc
+
+    if not quantity.is_finite() or quantity <= Decimal("0"):
+        raise ValidationError({
+            "quantity": "Quantity must be greater than zero."
+        })
+
+    if quantity.as_tuple().exponent < -3:
+        raise ValidationError({
+            "quantity": "Quantity supports at most three decimal places."
+        })
+
+    if quantity >= Decimal("1000000000"):
+        raise ValidationError({
+            "quantity": "Quantity exceeds the supported maximum."
+        })
+
+    # 7. Find the selling price effective at delivery time.
+    # Price periods follow [effective_from, effective_to).
     price = (
         ProductPrice.objects.select_for_update()
         .filter(
             business=business,
             product=product,
             price_type=ProductPrice.PriceType.SELLING,
-            effective_from__lte=effective_at,
+            is_deleted=False,
+            effective_from__lte=delivered_at,
         )
         .filter(
-            # The interval is [effective_from, effective_to).
-            # A null end date means the price remains effective.
             Q(effective_to__isnull=True)
-            | Q(effective_to__gt=effective_at)
+            | Q(effective_to__gt=delivered_at)
         )
-        ).order_by("-effective_from").first()
+        .order_by("-effective_from")
+        .first()
+    )
 
     if price is None:
-        raise ValidationError(
-            {
-                "product": (
-                    "No selling price is configured for this "
-                    "product on the delivery date."
-                )
-            }
-        )
+        raise ValidationError({
+            "product": (
+                "No selling price is configured for this product "
+                "at the delivery timestamp."
+            )
+        })
 
+    # 8. Create the delivery with the selected price snapshot.
+    # Delivery.save() calculates line_total.
     return Delivery.objects.create(
         business=business,
         customer=customer,
         product=product,
         delivery_date=delivery_date,
+        delivered_at=delivered_at,
         quantity=quantity,
         unit_price=price.unit_price,
         notes=notes,
