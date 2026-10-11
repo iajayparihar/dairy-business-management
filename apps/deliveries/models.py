@@ -1,5 +1,6 @@
+
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.core.validators import MinValueValidator
@@ -15,10 +16,13 @@ from apps.products.models import Product
 
 class Delivery(SoftDeleteModel):
     """
-    A record of a product delivered to a customer on a business date.
+    Records a product delivered to a customer.
 
-    unit_price is the price snapshot for this delivery.
-    Historical deliveries must not use the product's current price.
+    delivered_at is the exact delivery timestamp.
+    delivery_date is retained temporarily for backward compatibility
+    while existing records are migrated.
+
+    unit_price is the historical price snapshot for this delivery.
     """
 
     id = models.UUIDField(
@@ -45,7 +49,15 @@ class Delivery(SoftDeleteModel):
         related_name="deliveries",
     )
 
+    # Temporary compatibility field; do not remove until migration is complete.
     delivery_date = models.DateField()
+
+    # Nullable during the safe migration phase.
+    delivered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Exact delivery date and time, interpreted in Asia/Kolkata.",
+    )
 
     quantity = models.DecimalField(
         max_digits=12,
@@ -82,6 +94,7 @@ class Delivery(SoftDeleteModel):
     class Meta:
         db_table = "deliveries_delivery"
         ordering = ["-delivery_date", "-created_at"]
+
         constraints = [
             models.CheckConstraint(
                 condition=Q(quantity__gt=0),
@@ -96,6 +109,7 @@ class Delivery(SoftDeleteModel):
                 name="delivery_total_nonnegative",
             ),
         ]
+
         indexes = [
             models.Index(
                 fields=["business", "delivery_date"],
@@ -104,6 +118,14 @@ class Delivery(SoftDeleteModel):
             models.Index(
                 fields=["business", "customer", "delivery_date"],
                 name="delivery_customer_date_idx",
+            ),
+            models.Index(
+                fields=["business", "delivered_at"],
+                name="delivery_biz_time_idx",
+            ),
+            models.Index(
+                fields=["business", "customer", "delivered_at"],
+                name="delivery_cust_time_idx",
             ),
         ]
 
@@ -119,13 +141,29 @@ class Delivery(SoftDeleteModel):
     def save(self, *args, **kwargs):
         self.line_total = (
             self.quantity * self.unit_price
-        ).quantize(Decimal("0.01"))
+        ).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        # Ensure the calculated total is persisted when using update_fields.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+
+            if {"quantity", "unit_price"} & update_fields:
+                update_fields.add("line_total")
+
+            if update_fields:
+                kwargs["update_fields"] = update_fields
 
         super().save(*args, **kwargs)
 
     def __str__(self):
+        delivery_time = self.delivered_at or self.delivery_date
+
         return (
             f"{self.customer.name} - "
             f"{self.product.name} - "
-            f"{self.delivery_date}"
+            f"{delivery_time}"
         )
