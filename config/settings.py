@@ -60,7 +60,9 @@ own_apps = [
     "apps.reports.apps.ReportsConfig",
     "apps.businesses.apps.BusinessesConfig",
     "apps.suppliers.apps.SuppliersConfig",
+    "apps.deliveries.apps.DeliveriesConfig",
 ]
+
 INSTALLED_APPS += own_apps
 
 MIDDLEWARE = [
@@ -148,7 +150,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Kolkata"
 
 USE_I18N = True
 
