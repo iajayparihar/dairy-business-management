@@ -12,6 +12,43 @@ from apps.purchases.models import SupplierPurchase
 from apps.suppliers.models import Supplier
 
 
+class ImmutableLedgerQuerySet(models.QuerySet):
+    """Prevent bulk ORM operations from bypassing ledger safeguards."""
+
+    def update(self, **kwargs):
+        raise ValueError(
+            "Posted financial records cannot be bulk-updated."
+        )
+
+    def delete(self):
+        raise ValueError(
+            "Posted financial records cannot be bulk-deleted."
+        )
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValueError(
+            "Posted financial records cannot be bulk-updated."
+        )
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        raise ValueError(
+            "Use the payment service to create financial records."
+        )
+
+
+ImmutableLedgerManager = models.Manager.from_queryset(
+    ImmutableLedgerQuerySet
+)
+
+
 class SupplierPayment(models.Model):
     class PaymentMethod(models.TextChoices):
         CASH = "CASH", "Cash"
@@ -19,7 +56,9 @@ class SupplierPayment(models.Model):
         BANK_TRANSFER = "BANK_TRANSFER", "Bank transfer"
         CHEQUE = "CHEQUE", "Cheque"
         OTHER = "OTHER", "Other"
-
+        
+    objects = ImmutableLedgerManager()
+    
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -105,7 +144,9 @@ class SupplierPaymentAllocation(models.Model):
 
     Any unallocated payment amount remains an advance/credit.
     """
-
+    
+    objects = ImmutableLedgerManager()
+    
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -167,3 +208,5 @@ class SupplierPaymentAllocation(models.Model):
 
     def __str__(self):
         return f"{self.payment.payment_number} - {self.amount}"
+
+

@@ -384,3 +384,83 @@ class SupplierPaymentTests(TestCase):
                 payment_number="PAY-CROSS-BUSINESS-001",
             ).exists()
         )
+
+    def test_queryset_update_is_blocked(self):
+        payment = self.record_payment(
+            payment_number="PAY-IMM-001",
+            amount="100.00",
+        )
+
+        with self.assertRaises(ValueError):
+            SupplierPayment.objects.filter(
+                pk=payment.pk
+            ).update(notes="Tampered")
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.notes, "")
+
+    def test_queryset_delete_is_blocked(self):
+        payment = self.record_payment(
+            payment_number="PAY-IMM-002",
+            amount="100.00",
+        )
+
+        with self.assertRaises(ValueError):
+            SupplierPayment.objects.filter(
+                pk=payment.pk
+            ).delete()
+
+        self.assertTrue(
+            SupplierPayment.objects.filter(pk=payment.pk).exists()
+        )
+
+    def test_allocation_queryset_update_is_blocked(self):
+        payment = self.record_payment(
+            payment_number="PAY-IMM-003",
+            amount="200.00",
+            allocations=[
+                {
+                    "purchase_id": self.purchase.id,
+                    "amount": "100.00",
+                }
+            ],
+        )
+
+        allocation = SupplierPaymentAllocation.objects.get(
+            payment=payment
+        )
+
+        with self.assertRaises(ValueError):
+            SupplierPaymentAllocation.objects.filter(
+                pk=allocation.pk
+            ).update(amount=Decimal("50.00"))
+
+        allocation.refresh_from_db()
+        self.assertEqual(allocation.amount, Decimal("100.00"))
+
+    def test_allocation_queryset_delete_is_blocked(self):
+        payment = self.record_payment(
+            payment_number="PAY-IMM-004",
+            amount="200.00",
+            allocations=[
+                {
+                    "purchase_id": self.purchase.id,
+                    "amount": "100.00",
+                }
+            ],
+        )
+
+        allocation = SupplierPaymentAllocation.objects.get(
+            payment=payment
+        )
+
+        with self.assertRaises(ValueError):
+            SupplierPaymentAllocation.objects.filter(
+                pk=allocation.pk
+            ).delete()
+
+        self.assertTrue(
+            SupplierPaymentAllocation.objects.filter(
+                pk=allocation.pk
+            ).exists()
+        )
