@@ -255,3 +255,14 @@ If it does not exist, create it again using Section 2.
 ---
 
 **Development note:** Use separate credentials and environment configuration for development, testing, and production. Back up important data before making database or migration changes.
+
+
+___
+
+# Test Cmd
+## run all of the tests
+
+python manage.py test 
+
+## run specific tests so change the module name
+python manage.py test tests.payment
