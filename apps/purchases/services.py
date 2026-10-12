@@ -10,7 +10,9 @@ from apps.businesses.services import require_business_membership
 from apps.inventory.models import StockMovement
 from apps.products.models import Product
 from apps.purchases.models import PurchaseLine, SupplierPurchase
-from apps.suppliers.models import Supplier
+from apps.suppliers.models import Supplier, SupplierMilkRate
+from apps.purchases.models import MilkCollection
+from apps.suppliers.services import calculate_supplier_milk_amount
 
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
@@ -133,7 +135,7 @@ def create_purchase(
 
 @transaction.atomic
 def update_draft_purchase(*, purchase_id, user, supplier_id=None,
-                          purchased_at=None, lines=None, notes=None):
+                        purchased_at=None, lines=None, notes=None):
     purchase = SupplierPurchase.objects.select_for_update().get(
         pk=purchase_id
     )
@@ -240,3 +242,124 @@ def receive_purchase(*, purchase_id, user):
     purchase.save(update_fields=["status", "received_at", "updated_at"])
 
     return purchase
+
+
+
+@transaction.atomic
+def create_milk_collection(
+    *,
+    business_id,
+    supplier_id,
+    collection_number,
+    milk_type,
+    collected_at,
+    litres,
+    fat,
+    user,
+):
+    require_business_membership(
+        user=user,
+        business_id=business_id,
+        allowed_roles=["OWNER", "MANAGER"],
+    )
+
+    if not timezone.is_aware(collected_at):
+        raise ValidationError({
+            "collected_at": "Collection time must include a timezone."
+        })
+
+    if milk_type not in MilkCollection.MilkType.values:
+        raise ValidationError({"milk_type": "Invalid milk type."})
+
+    if not collection_number or not collection_number.strip():
+        raise ValidationError({
+            "collection_number": "Collection number is required."
+        })
+
+    def decimal_value(value, field, *, minimum, max_decimal_places):
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValidationError({field: "Enter a valid number."})
+
+        if not number.is_finite():
+            raise ValidationError({field: "Enter a finite number."})
+
+        if number < minimum:
+            raise ValidationError({
+                field: f"Value must be at least {minimum}."
+            })
+
+        if number.as_tuple().exponent < -max_decimal_places:
+            raise ValidationError({
+                field: f"Maximum {max_decimal_places} decimal places allowed."
+            })
+
+        return number
+
+    litres = decimal_value(
+        litres, "litres", minimum=Decimal("0.001"),
+        max_decimal_places=3,
+    )
+    fat = decimal_value(
+        fat, "fat", minimum=Decimal("0"),
+        max_decimal_places=2,
+    )
+
+    # Lock the supplier while validating and creating the collection.
+    supplier = Supplier.objects.select_for_update().filter(
+        id=supplier_id,
+        business_id=business_id,
+        is_active=True,
+        is_deleted=False,
+    ).first()
+
+    if supplier is None:
+        raise ValidationError(
+            "Supplier does not exist, is inactive, or belongs to another business."
+        )
+
+    # Unique constraint on (business, collection_number) is the
+    # final protection against duplicate submissions.
+    if MilkCollection.objects.filter(
+        business_id=business_id,
+        collection_number=collection_number.strip(),
+    ).exists():
+        raise ValidationError({
+            "collection_number": "This collection number already exists."
+        })
+
+    calculation = calculate_supplier_milk_amount(
+        business_id=business_id,
+        supplier_id=supplier.id,
+        milk_type=milk_type,
+        collected_at=collected_at,
+        litres=litres,
+        fat=fat,
+    )
+
+    rate_record = calculation["rate_record"]
+
+    # Additional consistency checks before persisting the snapshot.
+    if rate_record.business_id != business_id:
+        raise ValidationError("Rate belongs to another business.")
+
+    if rate_record.supplier_id != supplier.id:
+        raise ValidationError("Rate belongs to another supplier.")
+
+    if rate_record.milk_type != milk_type:
+        raise ValidationError("Rate is configured for another milk type.")
+
+    return MilkCollection.objects.create(
+        business_id=business_id,
+        supplier=supplier,
+        rate_record=rate_record,
+        collection_number=collection_number.strip(),
+        milk_type=milk_type,
+        collected_at=collected_at,
+        litres=litres,
+        fat=fat,
+        applied_rate=calculation["applied_rate"],
+        amount=calculation["amount"],
+        created_by=user,
+    )
