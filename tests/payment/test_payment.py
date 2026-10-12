@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from apps.businesses.models import Business, BusinessMembership
 from apps.suppliers.models import Supplier
 from apps.purchases.models import SupplierPurchase
@@ -16,8 +17,107 @@ from apps.payments.models import (
 from apps.payments.services import record_supplier_payment
 from apps.payments.selectors import get_supplier_balance
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from django.db import close_old_connections
+from django.test import TransactionTestCase
 
 User = get_user_model()
+
+
+class SupplierPaymentConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.user = User.objects.create_user(
+            username="concurrency_owner",
+            password="test-password",
+        )
+
+        self.business = Business.objects.create(
+            name="Concurrency Dairy",
+            slug="concurrency-dairy",
+        )
+
+        BusinessMembership.objects.create(
+            business=self.business,
+            user=self.user,
+            role=BusinessMembership.Role.OWNER,
+            is_active=True,
+        )
+
+        self.supplier = Supplier.objects.create(
+            business=self.business,
+            supplier_code="CONC-SUP-001",
+            name="Concurrency Supplier",
+        )
+
+        self.purchase = SupplierPurchase.objects.create(
+            business=self.business,
+            supplier=self.supplier,
+            purchase_number="CONC-PUR-001",
+            purchased_at=timezone.now(),
+            status=SupplierPurchase.Status.RECEIVED,
+            total_amount=Decimal("1000.00"),
+            created_by=self.user,
+            received_at=timezone.now(),
+        )
+
+    def test_concurrent_allocations_cannot_overpay_purchase(self):
+        barrier = Barrier(2)
+
+        def attempt_payment(payment_number):
+            close_old_connections()
+            try:
+                user = get_user_model().objects.get(pk=self.user.pk)
+
+                # Start both requests together.
+                barrier.wait(timeout=10)
+
+                record_supplier_payment(
+                    business_id=self.business.id,
+                    supplier_id=self.supplier.id,
+                    payment_number=payment_number,
+                    paid_at=timezone.now(),
+                    amount=Decimal("700.00"),
+                    user=user,
+                    allocations=[
+                        {
+                            "purchase_id": self.purchase.id,
+                            "amount": Decimal("700.00"),
+                        }
+                    ],
+                )
+                return "success"
+
+            except ValidationError:
+                return "rejected"
+
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    attempt_payment,
+                    ["CONC-PAY-001", "CONC-PAY-002"],
+                )
+            )
+
+        self.assertEqual(results.count("success"), 1)
+        self.assertEqual(results.count("rejected"), 1)
+
+        allocated = (
+            SupplierPaymentAllocation.objects.filter(
+                purchase=self.purchase
+            ).aggregate(total=Sum("amount"))["total"]
+            or Decimal("0.00")
+        )
+
+        self.assertEqual(allocated, Decimal("700.00"))
 
 
 class SupplierPaymentTests(TestCase):
