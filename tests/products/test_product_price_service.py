@@ -10,6 +10,8 @@ from apps.businesses.models import Business
 from apps.businesses.services import create_business
 from apps.products.models import Product, ProductPrice
 from apps.products.services import change_product_price
+from datetime import datetime, timedelta
+from django.utils import timezone
 
 from django.contrib.auth import get_user_model
 
@@ -53,9 +55,9 @@ class ProductPriceServiceTests(TestCase):
             unit=Product.Unit.LITRE,
         )
 
-        self.change_at = datetime(
-            2026, 10, 12, 13, 0, tzinfo=IST
-        )
+        self.change_at = (
+            timezone.now() + timedelta(minutes=5)
+        ).astimezone(IST).replace(microsecond=0)
 
     def test_price_change_closes_old_period_and_creates_new_period(self):
         old_price = ProductPrice.objects.create(
@@ -63,9 +65,7 @@ class ProductPriceServiceTests(TestCase):
             product=self.product_a,
             price_type=ProductPrice.PriceType.SELLING,
             unit_price=Decimal("90.00"),
-            effective_from=datetime(
-                2026, 10, 12, 8, 0, tzinfo=IST
-            ),
+            effective_from=self.change_at - timedelta(hours=1),
             created_by=self.owner_a,
         )
 
@@ -91,9 +91,7 @@ class ProductPriceServiceTests(TestCase):
             product=self.product_b,
             price_type=ProductPrice.PriceType.SELLING,
             unit_price=Decimal("85.00"),
-            effective_from=datetime(
-                2026, 10, 12, 8, 0, tzinfo=IST
-            ),
+            effective_from=self.change_at - timedelta(hours=1),
             created_by=self.owner_b,
         )
 
@@ -129,9 +127,7 @@ class ProductPriceServiceTests(TestCase):
                 product_id=self.product_a.pk,
                 price_type=ProductPrice.PriceType.SELLING,
                 unit_price="120.00",
-                effective_from=datetime(
-                    2020, 1, 1, tzinfo=IST
-                ),
+                effective_from=self.change_at - timedelta(hours=1),
                 user=self.owner_a,
             )
 
@@ -142,6 +138,6 @@ class ProductPriceServiceTests(TestCase):
                 product_id=self.product_a.pk,
                 price_type=ProductPrice.PriceType.SELLING,
                 unit_price="120.00",
-                effective_from=datetime(2026, 10, 12, 13, 0),
+                effective_from=self.change_at - timedelta(hours=1),
                 user=self.owner_a,
             )
