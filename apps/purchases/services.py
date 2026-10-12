@@ -6,14 +6,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.businesses.models import Business
-from apps.businesses.services import require_business_membership
 from apps.inventory.models import StockMovement
 from apps.products.models import Product
-from apps.purchases.models import PurchaseLine, SupplierPurchase
 from apps.suppliers.models import Supplier, SupplierMilkRate
-from apps.purchases.models import MilkCollection
+from apps.purchases.models import MilkCollection, SupplierPurchase, PurchaseLine
 from apps.suppliers.services import calculate_supplier_milk_amount
-
+from apps.businesses.services import require_business_membership
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
 
@@ -276,45 +274,51 @@ def create_milk_collection(
     if milk_type not in MilkCollection.MilkType.values:
         raise ValidationError({"milk_type": "Invalid milk type."})
 
-    if not collection_number or not collection_number.strip():
+    collection_number = (collection_number or "").strip()
+
+    if not collection_number:
         raise ValidationError({
             "collection_number": "Collection number is required."
         })
 
-    def decimal_value(value, field, *, minimum, max_decimal_places):
+    # Prefix leaves room for the purchase number's 50-character limit.
+    purchase_number = f"MILK-{collection_number}"
+
+    if len(purchase_number) > 50:
+        raise ValidationError({
+            "collection_number": "Collection number is too long."
+        })
+
+    def decimal_value(value, field, minimum, max_places):
+        from decimal import Decimal, InvalidOperation
+
         try:
             number = Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             raise ValidationError({field: "Enter a valid number."})
 
-        if not number.is_finite():
-            raise ValidationError({field: "Enter a finite number."})
+        if not number.is_finite() or number < minimum:
+            raise ValidationError({field: "Invalid value."})
 
-        if number < minimum:
+        if number.as_tuple().exponent < -max_places:
             raise ValidationError({
-                field: f"Value must be at least {minimum}."
-            })
-
-        if number.as_tuple().exponent < -max_decimal_places:
-            raise ValidationError({
-                field: f"Maximum {max_decimal_places} decimal places allowed."
+                field: f"Maximum {max_places} decimal places allowed."
             })
 
         return number
 
-    litres = decimal_value(
-        litres, "litres", minimum=Decimal("0.001"),
-        max_decimal_places=3,
-    )
-    fat = decimal_value(
-        fat, "fat", minimum=Decimal("0"),
-        max_decimal_places=2,
+    litres = decimal_value(litres, "litres", Decimal("0.001"), 3)
+    fat = decimal_value(fat, "fat", Decimal("0"), 2)
+
+    # Serialize collection creation within the business.
+    # The unique database constraint remains the final safeguard.
+    business = Business.objects.select_for_update().get(
+        pk=business_id
     )
 
-    # Lock the supplier while validating and creating the collection.
-    supplier = Supplier.objects.select_for_update().filter(
-        id=supplier_id,
-        business_id=business_id,
+    supplier = Supplier.objects.filter(
+        pk=supplier_id,
+        business_id=business.id,
         is_active=True,
         is_deleted=False,
     ).first()
@@ -324,18 +328,24 @@ def create_milk_collection(
             "Supplier does not exist, is inactive, or belongs to another business."
         )
 
-    # Unique constraint on (business, collection_number) is the
-    # final protection against duplicate submissions.
     if MilkCollection.objects.filter(
-        business_id=business_id,
-        collection_number=collection_number.strip(),
+        business=business,
+        collection_number=collection_number,
     ).exists():
         raise ValidationError({
             "collection_number": "This collection number already exists."
         })
 
+    if SupplierPurchase.objects.filter(
+        business=business,
+        purchase_number=purchase_number,
+    ).exists():
+        raise ValidationError({
+            "collection_number": "A purchase with this number already exists."
+        })
+
     calculation = calculate_supplier_milk_amount(
-        business_id=business_id,
+        business_id=business.id,
         supplier_id=supplier.id,
         milk_type=milk_type,
         collected_at=collected_at,
@@ -344,27 +354,35 @@ def create_milk_collection(
     )
 
     rate_record = calculation["rate_record"]
+    amount = calculation["amount"]
 
-    # Additional consistency checks before persisting the snapshot.
-    if rate_record.business_id != business_id:
-        raise ValidationError("Rate belongs to another business.")
+    # Milk collection creates a payable, not a stock-tracked
+    # product purchase. Therefore no PurchaseLine is created.
+    purchase = SupplierPurchase.objects.create(
+        business=business,
+        supplier=supplier,
+        purchase_number=purchase_number,
+        purchased_at=collected_at,
+        status=SupplierPurchase.Status.RECEIVED,
+        notes=f"Milk collection {collection_number}",
+        total_amount=amount,
+        created_by=user,
+        received_at=timezone.now(),
+    )
 
-    if rate_record.supplier_id != supplier.id:
-        raise ValidationError("Rate belongs to another supplier.")
-
-    if rate_record.milk_type != milk_type:
-        raise ValidationError("Rate is configured for another milk type.")
-
-    return MilkCollection.objects.create(
-        business_id=business_id,
+    collection = MilkCollection.objects.create(
+        business=business,
         supplier=supplier,
         rate_record=rate_record,
-        collection_number=collection_number.strip(),
+        collection_number=collection_number,
         milk_type=milk_type,
         collected_at=collected_at,
         litres=litres,
         fat=fat,
-        applied_rate=calculation["applied_rate"],
-        amount=calculation["amount"],
+        applied_rate=rate_record.rate,
+        amount=amount,
+        purchase=purchase,
         created_by=user,
     )
+
+    return collection
