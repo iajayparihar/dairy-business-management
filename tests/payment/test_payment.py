@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
-
+from django.db import IntegrityError, transaction
 from apps.businesses.models import Business, BusinessMembership
 from apps.suppliers.models import Supplier
 from apps.purchases.models import SupplierPurchase
@@ -282,3 +282,105 @@ class SupplierPaymentTests(TestCase):
 
         with self.assertRaises(ValueError):
             allocation.delete()
+
+
+    def test_duplicate_payment_number_is_rejected(self):
+        self.record_payment(
+            payment_number="PAY-DUP-001",
+            amount="100.00",
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.record_payment(
+                    payment_number="PAY-DUP-001",
+                    amount="200.00",
+                )
+
+        self.assertEqual(
+            SupplierPayment.objects.filter(
+                business=self.business,
+                payment_number="PAY-DUP-001",
+            ).count(),
+            1,
+        )
+
+    def test_one_payment_can_cover_multiple_purchases(self):
+        second_purchase = self.create_purchase(
+            purchase_number="PUR-MULTI-002",
+            total_amount="500.00",
+        )
+
+        payment = self.record_payment(
+            payment_number="PAY-MULTI-001",
+            amount="1200.00",
+            allocations=[
+                {
+                    "purchase_id": self.purchase.id,
+                    "amount": "700.00",
+                },
+                {
+                    "purchase_id": second_purchase.id,
+                    "amount": "500.00",
+                },
+            ],
+        )
+
+        self.assertEqual(payment.allocations.count(), 2)
+
+        balance = get_supplier_balance(
+            business_id=self.business.id,
+            supplier_id=self.supplier.id,
+        )
+
+        self.assertEqual(
+            balance["total_purchases"],
+            Decimal("1500.00"),
+        )
+        self.assertEqual(
+            balance["allocated_payments"],
+            Decimal("1200.00"),
+        )
+        self.assertEqual(
+            balance["outstanding_amount"],
+            Decimal("300.00"),
+        )
+
+    def test_payment_cannot_allocate_to_another_business_purchase(self):
+        other_business = Business.objects.create(
+            name="Other Dairy",
+            slug="other-dairy",
+        )
+
+        BusinessMembership.objects.create(
+            business=other_business,
+            user=self.user,
+            role=BusinessMembership.Role.OWNER,
+            is_active=True,
+        )
+
+        other_supplier = Supplier.objects.create(
+            business=other_business,
+            supplier_code="OTHER-SUP-001",
+            name="Other Business Supplier",
+        )
+
+        with self.assertRaises(ValidationError):
+            self.record_payment(
+                payment_number="PAY-CROSS-BUSINESS-001",
+                amount="100.00",
+                business_id=other_business.id,
+                supplier_id=other_supplier.id,
+                allocations=[
+                    {
+                        "purchase_id": self.purchase.id,
+                        "amount": "100.00",
+                    }
+                ],
+            )
+
+        self.assertFalse(
+            SupplierPayment.objects.filter(
+                payment_number="PAY-CROSS-BUSINESS-001",
+            ).exists()
+        )

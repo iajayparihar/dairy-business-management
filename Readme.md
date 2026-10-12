@@ -266,3 +266,6 @@ python manage.py test
 
 ## run specific tests so change the module name
 python manage.py test tests.payment
+
+
+python manage.py test tests.payment --verbosity 2

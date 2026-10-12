@@ -164,3 +164,209 @@ def record_supplier_payment(
         )
 
     return payment
+
+
+
+@transaction.atomic
+def allocate_supplier_advance(
+    *,
+    payment_id,
+    purchase_id,
+    amount,
+    user,
+):
+    amount = _to_decimal(amount, "amount")
+
+    # Identify the business, then validate membership.
+    payment_ref = SupplierPayment.objects.only(
+        "business_id"
+    ).get(pk=payment_id)
+
+    require_business_membership(
+        user=user,
+        business_id=payment_ref.business_id,
+        allowed_roles=ALLOWED_ROLES,
+    )
+
+    # Lock the purchase first, matching the payment-recording
+    # service's purchase-locking strategy.
+    purchase_ref = SupplierPurchase.objects.only(
+        "business_id"
+    ).get(pk=purchase_id)
+
+    if purchase_ref.business_id != payment_ref.business_id:
+        raise ValidationError(
+            "Payment and purchase must belong to the same business."
+        )
+
+    purchase = SupplierPurchase.objects.select_for_update().get(
+        pk=purchase_id,
+        business_id=payment_ref.business_id,
+    )
+
+    payment = SupplierPayment.objects.select_for_update().get(
+        pk=payment_id,
+        business_id=payment_ref.business_id,
+    )
+
+    if payment.supplier_id != purchase.supplier_id:
+        raise ValidationError(
+            "Payment and purchase must belong to the same supplier."
+        )
+
+    if purchase.status != SupplierPurchase.Status.RECEIVED:
+        raise ValidationError(
+            "Only received purchases can receive allocations."
+        )
+
+    existing_allocations = list(
+        SupplierPaymentAllocation.objects.filter(
+            payment=payment
+        ).select_related("purchase")
+    )
+
+    already_allocated_from_payment = sum(
+        (item.amount for item in existing_allocations),
+        Decimal("0.00"),
+    )
+
+    remaining_advance = payment.amount - already_allocated_from_payment
+
+    if amount > remaining_advance:
+        raise ValidationError(
+            "Allocation exceeds the remaining advance."
+        )
+
+    already_allocated_to_purchase = (
+        SupplierPaymentAllocation.objects.filter(
+            purchase=purchase
+        ).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0.00")
+    )
+
+    outstanding = (
+        purchase.total_amount - already_allocated_to_purchase
+    )
+
+    if amount > outstanding:
+        raise ValidationError(
+            "Allocation exceeds the purchase's outstanding amount."
+        )
+
+    if SupplierPaymentAllocation.objects.filter(
+        payment=payment,
+        purchase=purchase,
+    ).exists():
+        raise ValidationError(
+            "This payment is already allocated to this purchase."
+        )
+
+    return SupplierPaymentAllocation.objects.create(
+        business_id=payment.business_id,
+        payment=payment,
+        purchase=purchase,
+        amount=amount,
+    )
+
+    def test_allocate_existing_advance_to_purchase(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-001",
+            amount="700.00",
+        )
+
+        allocation = allocate_supplier_advance(
+            payment_id=payment.id,
+            purchase_id=self.purchase.id,
+            amount="500.00",
+            user=self.user,
+        )
+
+        self.assertEqual(allocation.amount, Decimal("500.00"))
+        self.assertEqual(
+            SupplierPaymentAllocation.objects.filter(
+                payment=payment
+            ).aggregate(total=__import__(
+                "django.db.models", fromlist=["Sum"]
+            ).Sum("amount"))["total"],
+            Decimal("500.00"),
+        )
+
+        balance = get_supplier_balance(
+            business_id=self.business.id,
+            supplier_id=self.supplier.id,
+        )
+        self.assertEqual(
+            balance["outstanding_amount"], Decimal("500.00")
+        )
+
+    def test_cannot_allocate_more_than_remaining_advance(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-002",
+            amount="700.00",
+        )
+
+        allocate_supplier_advance(
+            payment_id=payment.id,
+            purchase_id=self.purchase.id,
+            amount="500.00",
+            user=self.user,
+        )
+
+        second_purchase = self.create_purchase(
+            purchase_number="PUR-ADV-002",
+            total_amount="1000.00",
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=second_purchase.id,
+                amount="300.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 1)
+
+    def test_cannot_allocate_more_than_purchase_outstanding(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-003",
+            amount="1200.00",
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=self.purchase.id,
+                amount="1200.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 0)
+
+    def test_advance_cannot_be_allocated_to_another_supplier(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-004",
+            amount="500.00",
+        )
+
+        other_supplier = Supplier.objects.create(
+            business=self.business,
+            supplier_code="SUP-ADV-OTHER",
+            name="Other Supplier",
+        )
+
+        other_purchase = self.create_purchase(
+            purchase_number="PUR-ADV-OTHER",
+            total_amount="500.00",
+            supplier=other_supplier,
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=other_purchase.id,
+                amount="200.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 0)
