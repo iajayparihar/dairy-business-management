@@ -210,3 +210,72 @@ class SupplierPaymentAllocation(models.Model):
         return f"{self.payment.payment_number} - {self.amount}"
 
 
+
+
+class SupplierPaymentReversal(models.Model):
+    """
+    Records a full reversal of a posted supplier payment.
+    The original payment and its allocations remain unchanged.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="supplier_payment_reversals",
+    )
+    payment = models.OneToOneField(
+        SupplierPayment,
+        on_delete=models.PROTECT,
+        related_name="reversal",
+    )
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    reason = models.TextField()
+    reversed_at = models.DateTimeField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableLedgerManager()
+
+    class Meta:
+        db_table = "payments_supplier_payment_reversal"
+        ordering = ["-reversed_at", "-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(amount__gt=0),
+                name="supplier_payment_reversal_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["business", "reversed_at"],
+                name="supp_reversal_biz_date_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Payment reversals are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError(
+            "Payment reversals cannot be deleted."
+        )
+
+    def __str__(self):
+        return f"Reversal of {self.payment.payment_number}"
