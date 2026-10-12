@@ -25,9 +25,11 @@ def get_supplier_balance(*, business_id, supplier_id):
             purchase__business_id=business_id,
             purchase__supplier_id=supplier_id,
             purchase__status=SupplierPurchase.Status.RECEIVED,
+            payment__reversal__isnull=True,
         ).aggregate(total=Sum("amount"))["total"]
         or Decimal("0.00")
     )
+
 
     return {
         "total_purchases": total_purchases,

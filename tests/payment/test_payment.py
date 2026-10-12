@@ -13,8 +13,13 @@ from apps.purchases.models import SupplierPurchase
 from apps.payments.models import (
     SupplierPayment,
     SupplierPaymentAllocation,
+    SupplierPaymentReversal,
 )
-from apps.payments.services import record_supplier_payment
+from apps.payments.services import (
+    record_supplier_payment,
+    allocate_supplier_advance,
+    reverse_supplier_payment,
+)
 from apps.payments.selectors import get_supplier_balance
 
 from concurrent.futures import ThreadPoolExecutor
@@ -564,3 +569,208 @@ class SupplierPaymentTests(TestCase):
                 pk=allocation.pk
             ).exists()
         )
+        
+    def test_allocate_existing_advance_to_purchase(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-001",
+            amount="700.00",
+        )
+
+        allocation = allocate_supplier_advance(
+            payment_id=payment.id,
+            purchase_id=self.purchase.id,
+            amount="500.00",
+            user=self.user,
+        )
+
+        self.assertEqual(allocation.amount, Decimal("500.00"))
+        self.assertEqual(
+            SupplierPaymentAllocation.objects.filter(
+                payment=payment
+            ).aggregate(total=__import__(
+                "django.db.models", fromlist=["Sum"]
+            ).Sum("amount"))["total"],
+            Decimal("500.00"),
+        )
+
+        balance = get_supplier_balance(
+            business_id=self.business.id,
+            supplier_id=self.supplier.id,
+        )
+        self.assertEqual(
+            balance["outstanding_amount"], Decimal("500.00")
+        )
+
+    def test_cannot_allocate_more_than_remaining_advance(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-002",
+            amount="700.00",
+        )
+
+        allocate_supplier_advance(
+            payment_id=payment.id,
+            purchase_id=self.purchase.id,
+            amount="500.00",
+            user=self.user,
+        )
+
+        second_purchase = self.create_purchase(
+            purchase_number="PUR-ADV-002",
+            total_amount="1000.00",
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=second_purchase.id,
+                amount="300.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 1)
+
+    def test_cannot_allocate_more_than_purchase_outstanding(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-003",
+            amount="1200.00",
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=self.purchase.id,
+                amount="1200.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 0)
+
+    def test_advance_cannot_be_allocated_to_another_supplier(self):
+        payment = self.record_payment(
+            payment_number="PAY-ADV-004",
+            amount="500.00",
+        )
+
+        other_supplier = Supplier.objects.create(
+            business=self.business,
+            supplier_code="SUP-ADV-OTHER",
+            name="Other Supplier",
+        )
+
+        other_purchase = self.create_purchase(
+            purchase_number="PUR-ADV-OTHER",
+            total_amount="500.00",
+            supplier=other_supplier,
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=other_purchase.id,
+                amount="200.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 0)
+        
+
+    def test_reversal_restores_purchase_outstanding_balance(self):
+        payment = self.record_payment(
+            payment_number="PAY-REV-001",
+            amount="400.00",
+            allocations=[
+                {
+                    "purchase_id": self.purchase.id,
+                    "amount": "400.00",
+                }
+            ],
+        )
+
+        reversal = reverse_supplier_payment(
+            payment_id=payment.id,
+            reason="Payment entered incorrectly",
+            user=self.user,
+        )
+
+        self.assertEqual(reversal.amount, Decimal("400.00"))
+
+        balance = get_supplier_balance(
+            business_id=self.business.id,
+            supplier_id=self.supplier.id,
+        )
+        self.assertEqual(
+            balance["outstanding_amount"], Decimal("1000.00")
+        )
+
+        # Original payment and allocation remain in the database.
+        self.assertTrue(
+            SupplierPayment.objects.filter(pk=payment.pk).exists()
+        )
+        self.assertEqual(payment.allocations.count(), 1)
+
+    def test_payment_cannot_be_reversed_twice(self):
+        payment = self.record_payment(
+            payment_number="PAY-REV-002",
+            amount="100.00",
+        )
+
+        reverse_supplier_payment(
+            payment_id=payment.id,
+            reason="Incorrect entry",
+            user=self.user,
+        )
+
+        with self.assertRaises(ValidationError):
+            reverse_supplier_payment(
+                payment_id=payment.id,
+                reason="Second reversal attempt",
+                user=self.user,
+            )
+
+        self.assertEqual(
+            SupplierPaymentReversal.objects.filter(
+                payment=payment
+            ).count(),
+            1,
+        )
+
+    def test_reversal_requires_reason(self):
+        payment = self.record_payment(
+            payment_number="PAY-REV-003",
+            amount="100.00",
+        )
+
+        with self.assertRaises(ValidationError):
+            reverse_supplier_payment(
+                payment_id=payment.id,
+                reason="   ",
+                user=self.user,
+            )
+
+        self.assertFalse(
+            SupplierPaymentReversal.objects.filter(
+                payment=payment
+            ).exists()
+        )
+
+    def test_reversed_payment_cannot_be_allocated_later(self):
+        payment = self.record_payment(
+            payment_number="PAY-REV-004",
+            amount="500.00",
+        )
+
+        reverse_supplier_payment(
+            payment_id=payment.id,
+            reason="Wrong payment",
+            user=self.user,
+        )
+
+        with self.assertRaises(ValidationError):
+            allocate_supplier_advance(
+                payment_id=payment.id,
+                purchase_id=self.purchase.id,
+                amount="100.00",
+                user=self.user,
+            )
+
+        self.assertEqual(payment.allocations.count(), 0)
