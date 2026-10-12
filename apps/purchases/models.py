@@ -10,7 +10,7 @@ from django.db.models import Q
 from apps.businesses.models import Business
 from apps.common.models import SoftDeleteModel
 from apps.products.models import Product
-from apps.suppliers.models import Supplier
+from apps.suppliers.models import Supplier, SupplierMilkRate
 
 
 class SupplierPurchase(SoftDeleteModel):
@@ -152,3 +152,113 @@ class PurchaseLine(SoftDeleteModel):
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
+
+
+
+
+class MilkCollection(SoftDeleteModel):
+    class MilkType(models.TextChoices):
+        COW = "COW", "Cow"
+        BUFFALO = "BUFFALO", "Buffalo"
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="milk_collections",
+    )
+    supplier = models.ForeignKey(
+        Supplier,
+        on_delete=models.PROTECT,
+        related_name="milk_collections",
+    )
+    rate_record = models.ForeignKey(
+        SupplierMilkRate,
+        on_delete=models.PROTECT,
+        related_name="milk_collections",
+    )
+
+    # Prevents duplicate collection submissions.
+    collection_number = models.CharField(max_length=50)
+
+    milk_type = models.CharField(
+        max_length=10,
+        choices=MilkType.choices,
+    )
+    collected_at = models.DateTimeField()
+
+    litres = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+    )
+    fat = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+    )
+
+    # Immutable pricing snapshots.
+    applied_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+    )
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+    )
+
+    # Linked to the supplier payable in the next integration stage.
+    purchase = models.OneToOneField(
+        "purchases.SupplierPurchase",
+        on_delete=models.PROTECT,
+        related_name="milk_collection",
+        null=True,
+        blank=True,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "purchases_milk_collection"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["business", "collection_number"],
+                name="uniq_milk_collection_number",
+            ),
+            models.CheckConstraint(
+                condition=Q(litres__gt=0),
+                name="milk_collection_litres_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(fat__gte=0),
+                name="milk_collection_fat_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=Q(applied_rate__gte=0),
+                name="milk_collection_rate_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gte=0),
+                name="milk_collection_amount_nonnegative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["business", "supplier", "collected_at"],
+                name="milk_coll_biz_supp_date_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.collection_number} - {self.amount}"
