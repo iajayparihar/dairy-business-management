@@ -54,9 +54,14 @@ def _validate_lines(lines):
                 {"quantity": "Quantity must be positive with at most 3 decimals."}
             )
 
-        if unit_price < 0 or unit_price.as_tuple().exponent < -2:
+        if unit_price < 0 or unit_price.as_tuple().exponent < -4:
             raise ValidationError(
-                {"unit_price": "Price must be non-negative with at most 2 decimals."}
+                {
+                    "unit_price": (
+                        "Price must be non-negative "
+                        "with at most 4 decimal places."
+                    )
+                }
             )
 
         validated.append(

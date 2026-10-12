@@ -97,9 +97,9 @@ class PurchaseLine(SoftDeleteModel):
         validators=[MinValueValidator(Decimal("0.001"))],
     )
     unit_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        validators=[MinValueValidator(Decimal("0.00"))],
+        max_digits=14,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0.0000"))],
     )
     line_total = models.DecimalField(
         max_digits=14,
