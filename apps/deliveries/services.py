@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from apps.businesses.models import Business
@@ -12,6 +12,7 @@ from apps.businesses.services import require_business_membership
 from apps.customers.models import Customer
 from apps.deliveries.models import Delivery
 from apps.products.models import Product, ProductPrice
+from apps.inventory.models import StockMovement
 
 
 @transaction.atomic
@@ -164,7 +165,24 @@ def create_delivery(
 
     # 8. Create the delivery with the selected price snapshot.
     # Delivery.save() calculates line_total.
-    return Delivery.objects.create(
+    
+    # Check available stock before recording a delivery.
+    if product.track_stock:
+        available_stock = _get_stock_balance(
+            business_id=business.pk,
+            product_id=product.pk,
+        )
+
+        if quantity > available_stock:
+            raise ValidationError({
+                "quantity": (
+                    f"Insufficient stock. Available: {available_stock}, "
+                    f"requested: {quantity}."
+                )
+            })
+
+    # Create the delivery with its historical price snapshot.
+    delivery = Delivery.objects.create(
         business=business,
         customer=customer,
         product=product,
@@ -174,4 +192,53 @@ def create_delivery(
         unit_price=price.unit_price,
         notes=notes,
         created_by=user,
+    )
+
+    # Record stock deduction in the same database transaction.
+    if product.track_stock:
+        StockMovement.objects.create(
+            business=business,
+            product=product,
+            movement_type=StockMovement.MovementType.DELIVERY,
+            quantity=quantity,
+            occurred_at=delivered_at,
+            reason=f"Customer delivery {delivery.pk}",
+            created_by=user,
+            delivery=delivery,
+        )
+
+    return delivery
+
+
+
+
+def _get_stock_balance(*, business_id, product_id):
+    stock_in_types = [
+        StockMovement.MovementType.PURCHASE_RECEIPT,
+        StockMovement.MovementType.ADJUSTMENT_IN,
+        StockMovement.MovementType.REVERSAL_IN,
+    ]
+
+    stock_out_types = [
+        StockMovement.MovementType.DELIVERY,
+        StockMovement.MovementType.WASTAGE,
+        StockMovement.MovementType.ADJUSTMENT_OUT,
+        StockMovement.MovementType.REVERSAL_OUT,
+    ]
+
+    movements = StockMovement.objects.filter(
+        business_id=business_id,
+        product_id=product_id,
+    )
+
+    stock_in = movements.filter(
+        movement_type__in=stock_in_types,
+    ).aggregate(total=Sum("quantity"))["total"]
+
+    stock_out = movements.filter(
+        movement_type__in=stock_out_types,
+    ).aggregate(total=Sum("quantity"))["total"]
+
+    return (stock_in or Decimal("0.000")) - (
+        stock_out or Decimal("0.000")
     )
