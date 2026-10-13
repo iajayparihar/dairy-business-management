@@ -141,12 +141,18 @@ def record_supplier_payment(
                 "before payment can be allocated."
             )
 
+        
         already_allocated = (
             SupplierPaymentAllocation.objects.filter(
-                purchase=purchase
+                business_id=business_id,
+                purchase=purchase,
+                payment__business_id=business_id,
+                payment__supplier_id=supplier_id,
+                payment__reversal__isnull=True,
             ).aggregate(total=Sum("amount"))["total"]
             or Decimal("0.00")
         )
+
 
         outstanding = purchase.total_amount - already_allocated
 
@@ -227,6 +233,13 @@ def allocate_supplier_advance(
             "Payment and purchase must belong to the same supplier."
         )
 
+    if SupplierPaymentReversal.objects.filter(
+        payment=payment
+    ).exists():
+        raise ValidationError(
+            "A reversed payment cannot be allocated."
+        )
+
     if purchase.status != SupplierPurchase.Status.RECEIVED:
         raise ValidationError(
             "Only received purchases can receive allocations."
@@ -250,12 +263,18 @@ def allocate_supplier_advance(
             "Allocation exceeds the remaining advance."
         )
 
+    
     already_allocated_to_purchase = (
         SupplierPaymentAllocation.objects.filter(
-            purchase=purchase
+            business_id=payment.business_id,
+            purchase=purchase,
+            payment__business_id=payment.business_id,
+            payment__supplier_id=payment.supplier_id,
+            payment__reversal__isnull=True,
         ).aggregate(total=Sum("amount"))["total"]
         or Decimal("0.00")
     )
+
 
     outstanding = (
         purchase.total_amount - already_allocated_to_purchase

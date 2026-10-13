@@ -12,11 +12,13 @@ from apps.payments.models import (
     SupplierPaymentAllocation,
     SupplierPaymentReversal,
 )
-from apps.payments.services import record_supplier_payment
 from apps.payments.statements import get_supplier_account_statement
 from apps.purchases.models import SupplierPurchase
 from apps.suppliers.models import Supplier
-
+from apps.payments.services import (
+    allocate_supplier_advance,
+    record_supplier_payment,
+)
 
 class SupplierStatementRegressionTests(TestCase):
     def setUp(self):
@@ -144,3 +146,63 @@ class SupplierStatementRegressionTests(TestCase):
                 payment_number="PAY-CROSS-001",
             ).exists()
         )
+
+    def test_reversed_allocation_does_not_block_replacement_payment(self):
+        SupplierPaymentReversal.objects.create(
+            business=self.business,
+            payment=self.payment,
+            amount=self.payment.amount,
+            reason="Replacement payment regression",
+            reversed_at=self.now,
+            created_by=self.user,
+        )
+
+        replacement = record_supplier_payment(
+            business_id=self.business.pk,
+            supplier_id=self.supplier.pk,
+            payment_number="PAY-REPLACEMENT-001",
+            paid_at=self.now,
+            amount=Decimal("100.00"),
+            user=self.user,
+            allocations=[
+                {
+                    "purchase_id": self.purchase.pk,
+                    "amount": Decimal("100.00"),
+                }
+            ],
+        )
+
+        allocation = SupplierPaymentAllocation.objects.get(
+            payment=replacement,
+            purchase=self.purchase,
+        )
+        self.assertEqual(allocation.amount, Decimal("100.00"))
+
+
+    def test_reversed_allocation_does_not_block_advance_allocation(self):
+        SupplierPaymentReversal.objects.create(
+            business=self.business,
+            payment=self.payment,
+            amount=self.payment.amount,
+            reason="Replacement advance regression",
+            reversed_at=self.now,
+            created_by=self.user,
+        )
+
+        advance = record_supplier_payment(
+            business_id=self.business.pk,
+            supplier_id=self.supplier.pk,
+            payment_number="PAY-ADVANCE-REPLACEMENT-001",
+            paid_at=self.now,
+            amount=Decimal("100.00"),
+            user=self.user,
+        )
+
+        allocation = allocate_supplier_advance(
+            payment_id=advance.pk,
+            purchase_id=self.purchase.pk,
+            amount=Decimal("100.00"),
+            user=self.user,
+        )
+
+        self.assertEqual(allocation.amount, Decimal("100.00"))
