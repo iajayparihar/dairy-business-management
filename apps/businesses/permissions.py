@@ -2,15 +2,17 @@
 from django.core.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
+from apps.businesses.models import Business
 from apps.businesses.services import require_business_membership
 
 
 class IsBusinessMember(BasePermission):
     """
-    Require active membership in the business specified in the URL.
+    Enforce business-level access.
 
-    Views may define required_business_roles to restrict access
-    to particular membership roles.
+    Superusers may access any active business without membership.
+    Normal users must have an active membership and satisfy the
+    view's required role. Object access remains business-scoped.
     """
 
     message = "You do not have permission to access this business."
@@ -21,42 +23,71 @@ class IsBusinessMember(BasePermission):
             or view.kwargs.get("business_pk")
         )
 
-        # Business context must come from the URL, not an untrusted body.
         if not business_id:
             return False
 
+        user = request.user
+
+        if (
+            not user
+            or not user.is_authenticated
+            or not user.is_active
+        ):
+            return False
+
+        if user.is_superuser:
+            business = Business.objects.filter(
+                pk=business_id,
+                is_active=True,
+            ).first()
+
+            if business is None:
+                return False
+
+            request.business = business
+            request.business_membership = None
+            return True
+
         allowed_roles = getattr(
-            view, "required_business_roles", None
+            view,
+            "required_business_roles",
+            None,
         )
 
         try:
             membership = require_business_membership(
-                user=request.user,
+                user=user,
                 business_id=business_id,
                 allowed_roles=allowed_roles,
             )
         except (PermissionDenied, ValueError, TypeError):
             return False
 
-        request.business_membership = membership
         request.business = membership.business
+        request.business_membership = membership
         return True
 
     def has_object_permission(self, request, view, obj):
-        """
-        Reject objects belonging to a different business.
-        Querysets must still be tenant-scoped separately.
-        """
-        membership = getattr(
-            request, "business_membership", None
-        )
+        business = getattr(request, "business", None)
 
-        if membership is None:
+        if business is None:
             return False
 
         object_business_id = getattr(obj, "business_id", None)
 
         if object_business_id is None:
+            return False
+
+        if request.user.is_superuser:
+            return object_business_id == business.pk
+
+        membership = getattr(
+            request,
+            "business_membership",
+            None,
+        )
+
+        if membership is None:
             return False
 
         return object_business_id == membership.business_id
