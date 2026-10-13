@@ -213,7 +213,11 @@ def get_supplier_account_statement(
     total_valid_payments = _sum_amount(payments_to_date)
     total_allocated = _sum_amount(allocations_to_date)
 
-    outstanding_amount = total_purchases - total_allocated
+    outstanding_amount = max(
+        total_purchases - total_allocated,
+        ZERO,
+    )
+
     available_credit = max(
         total_valid_payments - total_allocated,
         ZERO,
