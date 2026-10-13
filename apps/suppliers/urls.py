@@ -5,6 +5,7 @@ from apps.suppliers.views import (
     SupplierDetailAPIView,
     SupplierListCreateAPIView,
 )
+from apps.suppliers.api_views import SupplierMilkRateListCreateAPIView
 
 app_name = "suppliers"
 
@@ -19,4 +20,11 @@ urlpatterns = [
         SupplierDetailAPIView.as_view(),
         name="supplier-detail",
     ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/milk-rates/",
+        SupplierMilkRateListCreateAPIView.as_view(),
+        name="supplier-milk-rate-list-create",
+    ),
 ]
+
