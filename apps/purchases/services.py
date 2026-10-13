@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-
+from django.db.models import Sum
 from apps.businesses.models import Business
 from apps.inventory.models import StockMovement
 from apps.products.models import Product
@@ -12,6 +12,11 @@ from apps.suppliers.models import Supplier, SupplierMilkRate
 from apps.purchases.models import MilkCollection, SupplierPurchase, PurchaseLine
 from apps.suppliers.services import calculate_supplier_milk_amount
 from apps.businesses.services import require_business_membership
+from apps.payments.models import (
+    SupplierPayment,
+    SupplierPaymentAllocation,
+)
+from apps.payments.services import allocate_supplier_advance
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
 
@@ -384,5 +389,44 @@ def create_milk_collection(
         purchase=purchase,
         created_by=user,
     )
+    
+        # Automatically apply available supplier advances to this purchase.
+    remaining_amount = purchase.total_amount
+
+    advance_payments = SupplierPayment.objects.filter(
+        business=business,
+        supplier=supplier,
+        reversal__isnull=True,
+    ).order_by("paid_at", "created_at")
+
+    for payment in advance_payments:
+        if remaining_amount <= Decimal("0.00"):
+            break
+
+        already_allocated = (
+            SupplierPaymentAllocation.objects.filter(
+                payment=payment,
+            ).aggregate(total=Sum("amount"))["total"]
+            or Decimal("0.00")
+        )
+
+        available_advance = payment.amount - already_allocated
+
+        if available_advance <= Decimal("0.00"):
+            continue
+
+        allocation_amount = min(
+            remaining_amount,
+            available_advance,
+        )
+
+        allocate_supplier_advance(
+            payment_id=payment.pk,
+            purchase_id=purchase.pk,
+            amount=allocation_amount,
+            user=user,
+        )
+
+        remaining_amount -= allocation_amount
 
     return collection
