@@ -13,7 +13,7 @@ from apps.payments.models import (
     SupplierPaymentReversal,
 )
 from apps.purchases.models import SupplierPurchase
-
+from apps.suppliers.models import Supplier
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
 
@@ -54,6 +54,18 @@ def record_supplier_payment(
         business_id=business_id,
         allowed_roles=ALLOWED_ROLES,
     )
+
+    supplier = Supplier.objects.filter(
+        pk=supplier_id,
+        business_id=business_id,
+        is_active=True,
+        is_deleted=False,
+    ).first()
+
+    if supplier is None:
+        raise ValidationError(
+            "Supplier does not exist, is inactive, or belongs to another business."
+        )
 
     if not timezone.is_aware(paid_at):
         raise ValidationError({
@@ -146,7 +158,7 @@ def record_supplier_payment(
 
     payment = SupplierPayment.objects.create(
         business_id=business_id,
-        supplier_id=supplier_id,
+        supplier=supplier,
         payment_number=payment_number,
         paid_at=paid_at,
         amount=amount,

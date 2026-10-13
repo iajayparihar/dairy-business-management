@@ -189,22 +189,23 @@ def get_supplier_account_statement(
         | Q(reversal__reversed_at__date__gt=end_date)
     )
 
+
     allocations_to_date = SupplierPaymentAllocation.objects.filter(
         business_id=business_id,
         payment__business_id=business_id,
         payment__supplier_id=supplier_id,
         payment__paid_at__date__lte=end_date,
         payment__created_at__date__lte=end_date,
-        payment__reversal__isnull=(
-            Q(payment__reversal__isnull=True)
-            | Q(payment__reversal__reversed_at__date__gt=end_date)
-        ),
         purchase__business_id=business_id,
         purchase__supplier_id=supplier_id,
         purchase__status=SupplierPurchase.Status.RECEIVED,
         purchase__purchased_at__date__lte=end_date,
         created_at__date__lte=end_date,
+    ).filter(
+        Q(payment__reversal__isnull=True)
+        | Q(payment__reversal__reversed_at__date__gt=end_date)
     )
+
 
     total_purchases = _sum_amount(
         purchases_to_date, "total_amount"
