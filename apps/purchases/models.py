@@ -71,7 +71,23 @@ class SupplierPurchase(SoftDeleteModel):
                 name="purchase_biz_supplier_date_idx",
             ),
         ]
+        
+    def clean(self):
+        super().clean()
 
+        if self.supplier_id:
+            if not self.supplier.is_active:
+                from django.core.exceptions import ValidationError
+                raise ValidationError({
+                    "supplier": "Cannot create a purchase for an inactive supplier."
+                })
+
+            if self.supplier.is_deleted:
+                from django.core.exceptions import ValidationError
+                raise ValidationError({
+                    "supplier": "Cannot create a purchase for a deleted supplier."
+                })
+                
     def __str__(self):
         return f"{self.purchase_number} - {self.supplier.name}"
 
