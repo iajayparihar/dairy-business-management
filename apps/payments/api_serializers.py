@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-
+from decimal import Decimal
 from apps.payments.models import SupplierPayment
 
 
@@ -10,7 +10,7 @@ class SupplierPaymentCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(
         max_digits=14,
         decimal_places=2,
-        min_value=0.01,
+        min_value=Decimal("0.001"),
     )
     payment_method = serializers.ChoiceField(
         choices=SupplierPayment.PaymentMethod.choices,

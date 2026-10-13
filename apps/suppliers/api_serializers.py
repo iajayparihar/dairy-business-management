@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-
+from decimal import Decimal
 from apps.suppliers.models import SupplierMilkRate
 
 
@@ -42,7 +42,7 @@ class SupplierMilkRateCreateSerializer(serializers.Serializer):
     rate = serializers.DecimalField(
         max_digits=10,
         decimal_places=2,
-        min_value=0,
+        min_value=Decimal("0.001"),
     )
     effective_from = serializers.DateTimeField()
     effective_to = serializers.DateTimeField(

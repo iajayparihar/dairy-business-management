@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-
+from decimal import Decimal
 from apps.purchases.models import MilkCollection
 
 
@@ -42,12 +42,12 @@ class MilkCollectionCreateSerializer(serializers.Serializer):
     litres = serializers.DecimalField(
         max_digits=12,
         decimal_places=3,
-        min_value=0.001,
+        min_value=Decimal("0.001"),
     )
     fat = serializers.DecimalField(
         max_digits=5,
         decimal_places=2,
-        min_value=0,
+        min_value=Decimal("0.00"),
     )
 
 
