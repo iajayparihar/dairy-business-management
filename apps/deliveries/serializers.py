@@ -115,3 +115,56 @@ class DeliveryFilterSerializer(serializers.Serializer):
         choices=Delivery.Status.choices, required=False,
     )
     has_shortfall = serializers.BooleanField(required=False)
+
+
+class DeliveryCancelSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500)
+
+
+class DeliveryCorrectSerializer(serializers.Serializer):
+    """Fields that may be corrected; omitted fields stay unchanged."""
+
+    reason = serializers.CharField(max_length=500)
+    quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=3,
+        min_value=Decimal("0.001"), required=False,
+    )
+    shift = serializers.ChoiceField(
+        choices=Delivery.Shift.choices, required=False,
+    )
+    unit_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2,
+        min_value=Decimal("0.00"), required=False,
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class DeliveryDetailSerializer(DeliveryReadSerializer):
+    """Delivery with its replacement link and stock history."""
+
+    replaced_by = serializers.SerializerMethodField()
+    stock_movements = serializers.SerializerMethodField()
+
+    class Meta(DeliveryReadSerializer.Meta):
+        fields = DeliveryReadSerializer.Meta.fields + [
+            "replaced_by",
+            "stock_movements",
+        ]
+        read_only_fields = fields
+
+    def get_replaced_by(self, obj):
+        replacement = getattr(obj, "replaced_by", None)
+        return replacement.pk if replacement else None
+
+    def get_stock_movements(self, obj):
+        return [
+            {
+                "id": m.pk,
+                "movement_type": m.movement_type,
+                "quantity": m.quantity,
+                "occurred_at": m.occurred_at,
+                "reversal_of": m.reversal_of_id,
+                "reason": m.reason,
+            }
+            for m in obj.stock_movements.order_by("created_at")
+        ]

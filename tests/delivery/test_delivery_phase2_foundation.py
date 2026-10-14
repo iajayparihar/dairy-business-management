@@ -1,10 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.db import IntegrityError, close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -82,6 +84,32 @@ class Phase2FoundationTests(TestCase):
         self._deliver(client_ref="abc-2")
         with self.assertRaises(ValidationError):
             self._deliver(client_ref="abc-2", customer_id=other.pk)
+
+    def test_replay_of_old_staff_entry_returns_original(self):
+        d = self._deliver(user=self.staff, client_ref="old-1")
+        Delivery.objects.filter(pk=d.pk).update(
+            delivered_at=timezone.now() - timedelta(days=4)
+        )
+        again = self._deliver(
+            user=self.staff, client_ref="old-1",
+            delivered_at=timezone.now() - timedelta(days=4),
+        )
+        self.assertEqual(again.pk, d.pk)
+
+    def test_replay_with_different_payload_is_rejected(self):
+        self._deliver(client_ref="mix-1", quantity="2")
+        with self.assertRaises(ValidationError):
+            self._deliver(client_ref="mix-1", quantity="3")
+        with self.assertRaises(ValidationError):
+            self._deliver(client_ref="mix-1", quantity="2", shift=Delivery.Shift.EVENING)
+
+    def test_queryset_delete_is_blocked(self):
+        self._deliver()
+        with self.assertRaises(ValueError):
+            Delivery.objects.all().delete()
+        with self.assertRaises(ValueError):
+            Delivery.all_objects.all().delete()
+        self.assertEqual(Delivery.objects.count(), 1)
 
     def test_future_timestamp_rejected(self):
         with self.assertRaises(ValidationError):
@@ -175,3 +203,57 @@ class DeliveryListFilterTests(TestCase):
         outsider = User.objects.create_user(username="lf_out", password="x-pass-123")
         self.client.force_authenticate(outsider)
         self.assertEqual(self.client.get(self.url).status_code, 403)
+
+
+class DeliveryConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="cc_owner", password="x-pass-123")
+        self.business = create_business(name="CC", slug="cc-dairy", owner=self.user)
+        self.customer = Customer.objects.create(
+            business=self.business, customer_code="C1", name="One",
+        )
+        self.milk = Product.objects.create(
+            business=self.business, sku="M", name="Milk", track_stock=True,
+        )
+        ProductPrice.objects.create(
+            business=self.business, product=self.milk,
+            price_type=ProductPrice.PriceType.SELLING, unit_price=Decimal("60"),
+            effective_from=timezone.now() - timedelta(days=60),
+        )
+
+    def _race(self, **extra):
+        barrier = Barrier(2)
+
+        def attempt(_):
+            close_old_connections()
+            try:
+                user = User.objects.get(pk=self.user.pk)
+                barrier.wait(timeout=10)
+                create_delivery(
+                    business_id=self.business.pk, customer_id=self.customer.pk,
+                    product_id=self.milk.pk, quantity="2", user=user, **extra,
+                )
+                return "ok"
+            except ValidationError:
+                return "rejected"
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            return list(pool.map(attempt, range(2)))
+
+    def test_simultaneous_duplicate_creates_one_delivery(self):
+        results = self._race()
+
+        self.assertEqual(sorted(results), ["ok", "rejected"])
+        self.assertEqual(Delivery.objects.count(), 1)
+        self.assertEqual(StockMovement.objects.filter(movement_type=MT.DELIVERY).count(), 1)
+
+    def test_simultaneous_retry_with_same_client_ref_creates_one_delivery(self):
+        results = self._race(client_ref="race-1")
+
+        self.assertEqual(results, ["ok", "ok"])
+        self.assertEqual(Delivery.objects.count(), 1)
+        self.assertEqual(StockMovement.objects.filter(movement_type=MT.DELIVERY).count(), 1)

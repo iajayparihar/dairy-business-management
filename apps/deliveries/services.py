@@ -73,22 +73,6 @@ def create_delivery(
         })
 
     delivered_at = delivered_at.astimezone(timezone.get_current_timezone())
-    now = timezone.now()
-
-    if delivered_at > now + CLOCK_SKEW:
-        raise ValidationError({
-            "delivered_at": "A delivery cannot be recorded in the future."
-        })
-
-    if (
-        membership.role == BusinessMembership.Role.STAFF
-        and delivered_at < now - STAFF_BACKDATE_LIMIT
-    ):
-        raise ValidationError({
-            "delivered_at": (
-                "Staff can only record deliveries from the last 48 hours."
-            )
-        })
 
     if shift not in Delivery.Shift.values:
         raise ValidationError({"shift": "Invalid shift."})
@@ -139,6 +123,8 @@ def create_delivery(
 
     quantity = _validate_quantity(quantity, product)
 
+    # A retry must be answered with the original delivery even if its
+    # timestamp is now outside the allowed window, so replay comes first.
     if client_ref:
         replay = Delivery.objects.filter(
             business=business,
@@ -146,16 +132,39 @@ def create_delivery(
         ).first()
 
         if replay is not None:
-            if (replay.customer_id, replay.product_id) != (
-                customer.pk,
-                product.pk,
-            ):
+            same = (
+                replay.customer_id == customer.pk
+                and replay.product_id == product.pk
+                and replay.quantity == quantity
+                and replay.shift == shift
+                and (unit_price is None or replay.unit_price == Decimal(str(unit_price)))
+            )
+
+            if not same:
                 raise ValidationError({
                     "client_ref": (
-                        "This reference was used for another delivery."
+                        "This reference was already used for a different "
+                        "delivery. Use a new reference for a new entry."
                     )
                 })
             return replay
+
+    now = timezone.now()
+
+    if delivered_at > now + CLOCK_SKEW:
+        raise ValidationError({
+            "delivered_at": "A delivery cannot be recorded in the future."
+        })
+
+    if (
+        membership.role == BusinessMembership.Role.STAFF
+        and delivered_at < now - STAFF_BACKDATE_LIMIT
+    ):
+        raise ValidationError({
+            "delivered_at": (
+                "Staff can only record deliveries from the last 48 hours."
+            )
+        })
 
     if Delivery.objects.filter(
         business=business,
@@ -325,4 +334,135 @@ def _get_stock_balance(*, business_id, product_id):
 
     return (totals["stock_in"] or Decimal("0.000")) - (
         totals["stock_out"] or Decimal("0.000")
+    )
+
+
+MANAGE_ROLES = [
+    BusinessMembership.Role.OWNER,
+    BusinessMembership.Role.MANAGER,
+]
+
+
+def _lock_delivery(business_id, delivery_id):
+    """Lock a delivery of this business; raises Delivery.DoesNotExist."""
+    return Delivery.objects.select_for_update().get(
+        pk=delivery_id,
+        business_id=business_id,
+    )
+
+
+def _clean_reason(reason):
+    reason = (reason or "").strip()
+
+    if not reason:
+        raise ValidationError({"reason": "A reason is required."})
+
+    return reason
+
+
+def _cancel_locked(delivery, *, user, reason):
+    """Cancel an already-locked delivery and reverse its stock."""
+    if delivery.status == Delivery.Status.CANCELLED:
+        raise ValidationError("This delivery is already cancelled.")
+
+    now = timezone.now()
+    original = StockMovement.objects.filter(
+        delivery=delivery,
+        movement_type=StockMovement.MovementType.DELIVERY,
+    ).first()
+
+    # Stock goes back through a compensating entry; history is kept.
+    if original is not None:
+        StockMovement.objects.create(
+            business_id=delivery.business_id,
+            product_id=delivery.product_id,
+            movement_type=StockMovement.MovementType.REVERSAL_IN,
+            quantity=original.quantity,
+            occurred_at=now,
+            reason=f"Cancelled delivery {delivery.pk}: {reason}",
+            created_by=user,
+            delivery=delivery,
+            reversal_of=original,
+        )
+
+    delivery.status = Delivery.Status.CANCELLED
+    delivery.cancelled_at = now
+    delivery.cancelled_by = user
+    delivery.cancel_reason = reason
+    delivery.save(update_fields=[
+        "status", "cancelled_at", "cancelled_by", "cancel_reason",
+        "updated_at",
+    ])
+
+
+@transaction.atomic
+def cancel_delivery(*, business_id, delivery_id, user, reason):
+    """Cancel a delivery (owner/manager). Keeps the row and reverses stock."""
+    require_business_membership(
+        user=user,
+        business_id=business_id,
+        allowed_roles=MANAGE_ROLES,
+    )
+    reason = _clean_reason(reason)
+    delivery = _lock_delivery(business_id, delivery_id)
+    _cancel_locked(delivery, user=user, reason=reason)
+
+    return delivery
+
+
+@transaction.atomic
+def correct_delivery(
+    *,
+    business_id,
+    delivery_id,
+    user,
+    reason,
+    quantity=None,
+    shift=None,
+    unit_price=None,
+    notes=None,
+):
+    """
+    Correct a delivery (owner/manager) by cancelling it and recording a
+    replacement at the original timestamp, so the price in force at the
+    time of delivery still applies. Returns the replacement.
+    """
+    require_business_membership(
+        user=user,
+        business_id=business_id,
+        allowed_roles=MANAGE_ROLES,
+    )
+    reason = _clean_reason(reason)
+    old = _lock_delivery(business_id, delivery_id)
+
+    if unit_price is not None and not old.product.allow_open_price:
+        raise ValidationError({
+            "unit_price": "The price of this product cannot be set manually."
+        })
+
+    new_quantity = old.quantity if quantity is None else Decimal(str(quantity))
+    new_shift = old.shift if shift is None else shift
+    new_notes = old.notes if notes is None else notes
+    new_price = old.unit_price if unit_price is None else Decimal(str(unit_price))
+
+    if (new_quantity, new_shift, new_price, new_notes) == (
+        old.quantity, old.shift, old.unit_price, old.notes,
+    ):
+        raise ValidationError("Nothing to correct.")
+
+    _cancel_locked(old, user=user, reason=f"Corrected: {reason}")
+
+    return create_delivery(
+        business_id=business_id,
+        customer_id=old.customer_id,
+        product_id=old.product_id,
+        quantity=new_quantity,
+        user=user,
+        delivered_at=old.delivered_at,
+        shift=new_shift,
+        # Only open-price products take a price; others re-resolve it
+        # at the original timestamp.
+        unit_price=new_price if old.product.allow_open_price else None,
+        notes=new_notes,
+        replaces=old,
     )

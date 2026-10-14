@@ -9,10 +9,22 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.businesses.models import Business
-from apps.common.models import SoftDeleteModel
+from apps.common.models import (
+    ActiveManager,
+    AllObjectsManager,
+    SoftDeleteModel,
+    SoftDeleteQuerySet,
+)
 from apps.common.validators import validate_same_business
 from apps.customers.models import Customer
 from apps.products.models import Product
+
+
+class DeliveryQuerySet(SoftDeleteQuerySet):
+    def delete(self):
+        raise ValueError(
+            "Deliveries cannot be deleted. Cancel the delivery instead."
+        )
 
 
 class Delivery(SoftDeleteModel):
@@ -26,6 +38,9 @@ class Delivery(SoftDeleteModel):
     Deliveries are never deleted: cancel them (status=CANCELLED) so
     the stock reversal and the reason stay on record.
     """
+
+    objects = ActiveManager.from_queryset(DeliveryQuerySet)()
+    all_objects = AllObjectsManager.from_queryset(DeliveryQuerySet)()
 
     class Shift(models.TextChoices):
         MORNING = "MORNING", "Morning"
