@@ -92,6 +92,11 @@ class StockMovement(models.Model):
                 condition=Q(movement_type="DELIVERY"),
                 name="uniq_stock_delivery_movement",
             ),
+            models.UniqueConstraint(
+                fields=["reversal_of"],
+                condition=Q(reversal_of__isnull=False),
+                name="uniq_stock_single_reversal",
+            ),
         ]
         indexes = [
             models.Index(

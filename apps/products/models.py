@@ -93,6 +93,8 @@ class Product(SoftDeleteModel):
 
     is_active = models.BooleanField(default=True)
     track_stock = models.BooleanField(default=False)
+    # "Other" items: the price is typed per sale instead of looked up.
+    allow_open_price = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -83,29 +83,37 @@ class DeliveryAPITests(TestCase):
             {
                 "customer_id": str(self.customer.pk),
                 "product_id": str(self.product.pk),
-                "delivered_at": timezone.now().isoformat(),
                 "quantity": "2.000",
-                "unit_price": "1.00",
-                "line_total": "2.00",
+                "line_total": "2.00",  # ignored: not an input field
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(
-            Decimal(response.data["unit_price"]),
-            Decimal("50.00"),
+        self.assertEqual(Decimal(response.data["unit_price"]), Decimal("50.00"))
+        self.assertEqual(Decimal(response.data["line_total"]), Decimal("100.00"))
+
+    def test_client_cannot_set_price_of_normal_product(self):
+        response = self.client.post(
+            self.url,
+            {
+                "customer_id": str(self.customer.pk),
+                "product_id": str(self.product.pk),
+                "quantity": "2.000",
+                "unit_price": "1.00",
+            },
+            format="json",
         )
-        self.assertEqual(
-            Decimal(response.data["line_total"]),
-            Decimal("100.00"),
-        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Delivery.objects.exists())
 
     def test_list_deliveries_returns_200(self):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [])
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["results"], [])
 
     def test_unauthenticated_user_cannot_list_deliveries(self):
         self.client.force_authenticate(user=None)

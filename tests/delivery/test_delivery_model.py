@@ -1,5 +1,6 @@
 
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -10,6 +11,8 @@ from apps.businesses.models import Business
 from apps.customers.models import Customer
 from apps.deliveries.models import Delivery
 from apps.products.models import Product
+
+AT = datetime(2026, 10, 11, 6, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 
 class DeliveryModelTests(TestCase):
@@ -55,7 +58,7 @@ class DeliveryModelTests(TestCase):
             business=self.business_a,
             customer=self.customer_a,
             product=self.product_a,
-            delivery_date=date(2026, 10, 11),
+            delivered_at=AT,
             quantity=Decimal("2.500"),
             unit_price=Decimal("50.00"),
         )
@@ -70,7 +73,7 @@ class DeliveryModelTests(TestCase):
             business=self.business_a,
             customer=self.customer_a,
             product=self.product_a,
-            delivery_date=date(2026, 10, 11),
+            delivered_at=AT,
             quantity=Decimal("2.000"),
             unit_price=Decimal("50.00"),
         )
@@ -94,7 +97,7 @@ class DeliveryModelTests(TestCase):
             business=self.business_a,
             customer=self.customer_b,
             product=self.product_a,
-            delivery_date=date(2026, 10, 11),
+            delivered_at=AT,
             quantity=Decimal("1.000"),
             unit_price=Decimal("50.00"),
         )
@@ -107,7 +110,7 @@ class DeliveryModelTests(TestCase):
             business=self.business_a,
             customer=self.customer_a,
             product=self.product_b,
-            delivery_date=date(2026, 10, 11),
+            delivered_at=AT,
             quantity=Decimal("1.000"),
             unit_price=Decimal("50.00"),
         )
@@ -122,29 +125,67 @@ class DeliveryModelTests(TestCase):
                     business=self.business_a,
                     customer=self.customer_a,
                     product=self.product_a,
-                    delivery_date=date(2026, 10, 11),
+                    delivered_at=AT,
                     quantity=Decimal("0.000"),
                     unit_price=Decimal("50.00"),
                 )
 
-    def test_delivery_can_be_soft_deleted_and_retained(self):
+    def test_delivery_date_is_derived_from_delivered_at(self):
+        late = datetime(2026, 10, 11, 23, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
         delivery = Delivery.objects.create(
             business=self.business_a,
             customer=self.customer_a,
             product=self.product_a,
-            delivery_date=date(2026, 10, 11),
+            delivered_at=late,
             quantity=Decimal("1.000"),
             unit_price=Decimal("50.00"),
         )
 
-        delivery.soft_delete()
+        self.assertEqual(delivery.delivery_date.isoformat(), "2026-10-11")
 
-        self.assertFalse(
-            Delivery.objects.filter(pk=delivery.pk).exists()
+    def test_delivery_cannot_be_deleted(self):
+        delivery = Delivery.objects.create(
+            business=self.business_a,
+            customer=self.customer_a,
+            product=self.product_a,
+            delivered_at=AT,
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("50.00"),
         )
-        self.assertTrue(
-            Delivery.all_objects.filter(
-                pk=delivery.pk,
-                is_deleted=True,
-            ).exists()
+
+        with self.assertRaises(ValueError):
+            delivery.delete()
+        with self.assertRaises(ValueError):
+            delivery.soft_delete()
+
+        self.assertTrue(Delivery.objects.filter(pk=delivery.pk).exists())
+
+    def test_one_delivered_row_per_customer_product_shift_day(self):
+        kwargs = dict(
+            business=self.business_a,
+            customer=self.customer_a,
+            product=self.product_a,
+            delivered_at=AT,
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("50.00"),
         )
+        Delivery.objects.create(**kwargs)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Delivery.objects.create(**kwargs)
+
+        Delivery.objects.create(**kwargs, shift=Delivery.Shift.EVENING)
+
+    def test_cancelled_delivery_requires_reason(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Delivery.objects.create(
+                    business=self.business_a,
+                    customer=self.customer_a,
+                    product=self.product_a,
+                    delivered_at=AT,
+                    quantity=Decimal("1.000"),
+                    unit_price=Decimal("50.00"),
+                    status=Delivery.Status.CANCELLED,
+                )

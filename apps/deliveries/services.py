@@ -1,5 +1,4 @@
-
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
@@ -7,12 +6,19 @@ from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
-from apps.businesses.models import Business
+from apps.businesses.models import Business, BusinessMembership
 from apps.businesses.services import require_business_membership
 from apps.customers.models import Customer
 from apps.deliveries.models import Delivery
-from apps.products.models import Product, ProductPrice
 from apps.inventory.models import StockMovement
+from apps.inventory.services import STOCK_IN_TYPES, STOCK_OUT_TYPES
+from apps.products.models import Product, ProductPrice
+
+# Delivery boys (STAFF) may only record recent deliveries; owners and
+# managers may backdate. Nobody may record a delivery in the future.
+STAFF_BACKDATE_LIMIT = timedelta(hours=48)
+CLOCK_SKEW = timedelta(minutes=5)
+WHOLE_NUMBER_UNITS = {Product.Unit.PIECE, Product.Unit.PACKET}
 
 
 @transaction.atomic
@@ -21,29 +27,39 @@ def create_delivery(
     business_id,
     customer_id,
     product_id,
-    delivered_at,
     quantity,
     user,
+    delivered_at=None,
+    shift=Delivery.Shift.MORNING,
+    unit_price=None,
+    client_ref=None,
     notes="",
+    replaces=None,
 ):
     """
-    Create a delivery using the selling price effective at the
-    exact delivery timestamp.
+    Record one product delivered to one customer in one shift.
 
-    The timestamp must be timezone-aware. Django's configured
-    timezone is used for local-time interpretation.
+    delivered_at defaults to now, must be timezone-aware and not in the
+    future. The selling price effective at that exact timestamp is saved
+    as a historical snapshot. unit_price is accepted only for open-price
+    products; for everything else the client cannot choose prices.
 
-    The client cannot choose unit_price or line_total.
-    The selected unit price is saved as a historical snapshot.
+    Re-sending the same client_ref returns the original delivery, so
+    retries from a poor connection never double-charge.
+
+    If stock tracking is on and stock is short, the delivery is still
+    recorded (the milk has left) and the gap is stored in
+    stock_shortfall for reconciliation.
     """
 
-    # 1. Verify business membership.
-    require_business_membership(
+    membership = require_business_membership(
         user=user,
         business_id=business_id,
     )
 
-    # 2. Validate the delivery timestamp.
+    if delivered_at is None:
+        delivered_at = timezone.now()
+
     if not isinstance(delivered_at, datetime):
         raise ValidationError({
             "delivered_at": "A valid delivery timestamp is required."
@@ -56,15 +72,27 @@ def create_delivery(
             )
         })
 
-    # Normalize the timestamp to Django's configured timezone.
-    delivered_at = delivered_at.astimezone(
-        timezone.get_current_timezone()
-    )
+    delivered_at = delivered_at.astimezone(timezone.get_current_timezone())
+    now = timezone.now()
 
-    # Derive the business date from the exact timestamp.
-    delivery_date = delivered_at.date()
+    if delivered_at > now + CLOCK_SKEW:
+        raise ValidationError({
+            "delivered_at": "A delivery cannot be recorded in the future."
+        })
 
-    # 3. Load the active business.
+    if (
+        membership.role == BusinessMembership.Role.STAFF
+        and delivered_at < now - STAFF_BACKDATE_LIMIT
+    ):
+        raise ValidationError({
+            "delivered_at": (
+                "Staff can only record deliveries from the last 48 hours."
+            )
+        })
+
+    if shift not in Delivery.Shift.values:
+        raise ValidationError({"shift": "Invalid shift."})
+
     try:
         business = Business.objects.get(
             pk=business_id,
@@ -76,7 +104,8 @@ def create_delivery(
             "business": "The business does not exist or is inactive."
         }) from exc
 
-    # 4. Lock and validate the customer.
+    # The customer lock serializes concurrent submissions for the same
+    # customer, which makes the replay and duplicate checks below safe.
     try:
         customer = Customer.objects.select_for_update().get(
             pk=customer_id,
@@ -92,7 +121,7 @@ def create_delivery(
             )
         }) from exc
 
-    # 5. Lock and validate the product.
+    # The product lock serializes the stock check per product.
     try:
         product = Product.objects.select_for_update().get(
             pk=product_id,
@@ -108,11 +137,95 @@ def create_delivery(
             )
         }) from exc
 
-    # 6. Validate quantity.
-    if quantity is None:
+    quantity = _validate_quantity(quantity, product)
+
+    if client_ref:
+        replay = Delivery.objects.filter(
+            business=business,
+            client_ref=client_ref,
+        ).first()
+
+        if replay is not None:
+            if (replay.customer_id, replay.product_id) != (
+                customer.pk,
+                product.pk,
+            ):
+                raise ValidationError({
+                    "client_ref": (
+                        "This reference was used for another delivery."
+                    )
+                })
+            return replay
+
+    if Delivery.objects.filter(
+        business=business,
+        customer=customer,
+        product=product,
+        delivery_date=delivered_at.date(),
+        shift=shift,
+        status=Delivery.Status.DELIVERED,
+    ).exists():
+        raise ValidationError(
+            "A delivery of this product is already recorded for this "
+            "customer, date and shift. Cancel it to record a correction."
+        )
+
+    if product.allow_open_price:
+        unit_price = _validate_open_price(unit_price)
+    elif unit_price is not None:
         raise ValidationError({
-            "quantity": "Quantity is required."
+            "unit_price": "The price of this product cannot be set manually."
         })
+    else:
+        unit_price = _effective_selling_price(
+            business, product, delivered_at,
+        )
+
+    shortfall = Decimal("0.000")
+
+    if product.track_stock:
+        available = _get_stock_balance(
+            business_id=business.pk,
+            product_id=product.pk,
+        )
+        shortfall = max(
+            quantity - max(available, Decimal("0")),
+            Decimal("0"),
+        )
+
+    delivery = Delivery.objects.create(
+        business=business,
+        customer=customer,
+        product=product,
+        delivered_at=delivered_at,
+        shift=shift,
+        quantity=quantity,
+        unit_price=unit_price,
+        stock_shortfall=shortfall,
+        client_ref=client_ref or None,
+        notes=notes,
+        created_by=user,
+        replaces=replaces,
+    )
+
+    if product.track_stock:
+        StockMovement.objects.create(
+            business=business,
+            product=product,
+            movement_type=StockMovement.MovementType.DELIVERY,
+            quantity=quantity,
+            occurred_at=delivered_at,
+            reason=f"Customer delivery {delivery.pk}",
+            created_by=user,
+            delivery=delivery,
+        )
+
+    return delivery
+
+
+def _validate_quantity(quantity, product):
+    if quantity is None:
+        raise ValidationError({"quantity": "Quantity is required."})
 
     try:
         quantity = Decimal(str(quantity))
@@ -136,21 +249,56 @@ def create_delivery(
             "quantity": "Quantity exceeds the supported maximum."
         })
 
-    # 7. Find the selling price effective at delivery time.
-    # Price periods follow [effective_from, effective_to).
+    if (
+        product.unit in WHOLE_NUMBER_UNITS
+        and quantity != quantity.to_integral_value()
+    ):
+        raise ValidationError({
+            "quantity": f"{product.get_unit_display()} must be a whole number."
+        })
+
+    return quantity
+
+
+def _validate_open_price(unit_price):
+    if unit_price is None:
+        raise ValidationError({
+            "unit_price": "This product requires a price per unit."
+        })
+
+    try:
+        unit_price = Decimal(str(unit_price))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValidationError({
+            "unit_price": "Enter a valid price."
+        }) from exc
+
+    if (
+        not unit_price.is_finite()
+        or unit_price < 0
+        or unit_price.as_tuple().exponent < -2
+        or unit_price >= Decimal("10000000000")
+    ):
+        raise ValidationError({
+            "unit_price": (
+                "Price must be zero or more, with at most 2 decimals."
+            )
+        })
+
+    return unit_price
+
+
+def _effective_selling_price(business, product, at):
+    """Selling price effective at `at`; periods are [from, to)."""
     price = (
-        ProductPrice.objects.select_for_update()
-        .filter(
+        ProductPrice.objects.filter(
             business=business,
             product=product,
             price_type=ProductPrice.PriceType.SELLING,
             is_deleted=False,
-            effective_from__lte=delivered_at,
+            effective_from__lte=at,
         )
-        .filter(
-            Q(effective_to__isnull=True)
-            | Q(effective_to__gt=delivered_at)
-        )
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gt=at))
         .order_by("-effective_from")
         .first()
     )
@@ -163,82 +311,18 @@ def create_delivery(
             )
         })
 
-    # 8. Create the delivery with the selected price snapshot.
-    # Delivery.save() calculates line_total.
-    
-    # Check available stock before recording a delivery.
-    if product.track_stock:
-        available_stock = _get_stock_balance(
-            business_id=business.pk,
-            product_id=product.pk,
-        )
-
-        if quantity > available_stock:
-            raise ValidationError({
-                "quantity": (
-                    f"Insufficient stock. Available: {available_stock}, "
-                    f"requested: {quantity}."
-                )
-            })
-
-    # Create the delivery with its historical price snapshot.
-    delivery = Delivery.objects.create(
-        business=business,
-        customer=customer,
-        product=product,
-        delivery_date=delivery_date,
-        delivered_at=delivered_at,
-        quantity=quantity,
-        unit_price=price.unit_price,
-        notes=notes,
-        created_by=user,
-    )
-
-    # Record stock deduction in the same database transaction.
-    if product.track_stock:
-        StockMovement.objects.create(
-            business=business,
-            product=product,
-            movement_type=StockMovement.MovementType.DELIVERY,
-            quantity=quantity,
-            occurred_at=delivered_at,
-            reason=f"Customer delivery {delivery.pk}",
-            created_by=user,
-            delivery=delivery,
-        )
-
-    return delivery
-
-
+    return price.unit_price
 
 
 def _get_stock_balance(*, business_id, product_id):
-    stock_in_types = [
-        StockMovement.MovementType.PURCHASE_RECEIPT,
-        StockMovement.MovementType.ADJUSTMENT_IN,
-        StockMovement.MovementType.REVERSAL_IN,
-    ]
-
-    stock_out_types = [
-        StockMovement.MovementType.DELIVERY,
-        StockMovement.MovementType.WASTAGE,
-        StockMovement.MovementType.ADJUSTMENT_OUT,
-        StockMovement.MovementType.REVERSAL_OUT,
-    ]
-
-    movements = StockMovement.objects.filter(
+    totals = StockMovement.objects.filter(
         business_id=business_id,
         product_id=product_id,
+    ).aggregate(
+        stock_in=Sum("quantity", filter=Q(movement_type__in=STOCK_IN_TYPES)),
+        stock_out=Sum("quantity", filter=Q(movement_type__in=STOCK_OUT_TYPES)),
     )
 
-    stock_in = movements.filter(
-        movement_type__in=stock_in_types,
-    ).aggregate(total=Sum("quantity"))["total"]
-
-    stock_out = movements.filter(
-        movement_type__in=stock_out_types,
-    ).aggregate(total=Sum("quantity"))["total"]
-
-    return (stock_in or Decimal("0.000")) - (
-        stock_out or Decimal("0.000")
+    return (totals["stock_in"] or Decimal("0.000")) - (
+        totals["stock_out"] or Decimal("0.000")
     )

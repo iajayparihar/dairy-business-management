@@ -8,6 +8,8 @@ from apps.deliveries.models import Delivery
 class DeliveryAdmin(admin.ModelAdmin):
     list_display = (
         "delivery_date",
+        "shift",
+        "status",
         "business",
         "customer",
         "product",
@@ -23,6 +25,9 @@ class DeliveryAdmin(admin.ModelAdmin):
         "customer__customer_code",
         "product__name",
     )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     readonly_fields = (
         "id",

@@ -67,6 +67,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "unit",
             "is_active",
             "track_stock",
+            "allow_open_price",
             "created_at",
             "updated_at",
         ]
