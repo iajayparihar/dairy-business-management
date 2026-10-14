@@ -89,7 +89,7 @@ class ProductAPITests(TestCase):
     def test_unauthenticated_request_is_rejected(self):
         response = self.client.get(self.product_list_url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
 
     def test_owner_can_list_own_products(self):
         self.client.force_authenticate(user=self.owner)

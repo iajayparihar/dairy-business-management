@@ -6,7 +6,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+.serena/
 # Distribution / packaging
 .Python
 env/
@@ -83,6 +83,9 @@ celerybeat-schedule
 # dotenv
 .env
 .env.prod
+.env.local
+.env.*
+!.env.example
 # virtualenv
 .venv
 venv/

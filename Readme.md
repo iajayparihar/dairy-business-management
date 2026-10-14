@@ -269,3 +269,13 @@ python manage.py test tests.payment
 
 
 python manage.py test tests.payment --verbosity 2
+## Password recovery (OTP)
+
+Endpoints under `/api/v1/auth/`: `password/forgot/`, `password/reset/`, `password/change/` (login/refresh/verify/logout unchanged).
+
+- **OTP**: 6 digits, stored only as an HMAC hash, single use, TTL `PASSWORD_RESET_OTP_TTL_MINUTES` (default 10), 5 attempts, 60 s resend cooldown. Enforced in PostgreSQL (row lock on the user + partial unique index "one live OTP per user"), independent of the cache.
+- **Tokens**: reset and change revoke *all* the user's refresh tokens (all-devices logout). Already-issued **access tokens stay valid until expiry (30 min)**; immediate access-token revocation is not implemented (accepted trade-off; shorten `ACCESS_TOKEN_LIFETIME` if needed). Session logins are invalidated automatically by Django's password hash.
+- **Throttles** (per client IP / user): login 10/min, forgot 5/hour, reset 10/hour, change 10/hour. Counters live in the Django cache; the default locmem cache is per-process, so set `REDIS_URL` (and `pip install redis`) for multi-worker deployments, and `NUM_PROXIES` behind a reverse proxy. Throttling alone does not stop distributed abuse; the DB limits above are the real guard.
+- **Email**: `EMAIL_HOST/PORT/HOST_USER/HOST_PASSWORD/USE_TLS/USE_SSL/TIMEOUT`, `DEFAULT_FROM_EMAIL`. Console backend is the default only when `DEBUG=True`; otherwise SMTP. Accounts with no email must be reset by an admin (`manage.py changepassword`).
+- **Deploy**: `python manage.py migrate`, then schedule `python manage.py purge_password_otps` (daily; deletes expired/used OTPs older than 1 day; idempotent).
+- **Secrets**: copy `.env.example` to `.env`. `.env.local` was previously committed and is now untracked; it remains in Git history, so rotate `SECRET_KEY`, `JWT_SIGNING_KEY` and the DB password if they were ever used outside local dev.
