@@ -301,6 +301,18 @@ class MilkCollection(SoftDeleteModel):
         COW = "COW", "Cow"
         BUFFALO = "BUFFALO", "Buffalo"
 
+    class Shift(models.TextChoices):
+        MORNING = "MORNING", "Morning"
+        EVENING = "EVENING", "Evening"
+
+    class Status(models.TextChoices):
+        RECORDED = "RECORDED", "Recorded"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    class PricingBasis(models.TextChoices):
+        FAT = "FAT", "Litres x fat x rate"
+        FLAT = "FLAT", "Litres x rate"
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -331,6 +343,45 @@ class MilkCollection(SoftDeleteModel):
         choices=MilkType.choices,
     )
     collected_at = models.DateTimeField()
+    shift = models.CharField(
+        max_length=10,
+        choices=Shift.choices,
+        default=Shift.MORNING,
+    )
+
+    # Retry safety: the same ref returns the original collection.
+    client_ref = models.CharField(max_length=64, null=True, blank=True)
+
+    # Entries are never deleted: they are cancelled (with a reason) or
+    # corrected, which cancels and links a replacement.
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.RECORDED,
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    cancel_reason = models.TextField(blank=True, default="")
+    # Litres of this entry that were already used when it was cancelled
+    # (stock went negative): flagged for reconciliation, never blocked.
+    cancel_stock_shortfall = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        default=Decimal("0.000"),
+    )
+    replaces = models.OneToOneField(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="replaced_by",
+    )
 
     litres = models.DecimalField(
         max_digits=12,
@@ -342,6 +393,12 @@ class MilkCollection(SoftDeleteModel):
     )
 
     # Immutable pricing snapshots.
+    # FAT: litres x fat x rate (buffalo). FLAT: litres x rate (cow).
+    pricing_basis = models.CharField(
+        max_length=4,
+        choices=PricingBasis.choices,
+        default=PricingBasis.FAT,
+    )
     applied_rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -376,6 +433,11 @@ class MilkCollection(SoftDeleteModel):
                 fields=["business", "collection_number"],
                 name="uniq_milk_collection_number",
             ),
+            models.UniqueConstraint(
+                fields=["business", "client_ref"],
+                condition=Q(client_ref__isnull=False),
+                name="uniq_milk_collection_client_ref",
+            ),
             models.CheckConstraint(
                 condition=Q(litres__gt=0),
                 name="milk_collection_litres_positive",
@@ -397,6 +459,10 @@ class MilkCollection(SoftDeleteModel):
             models.Index(
                 fields=["business", "supplier", "collected_at"],
                 name="milk_coll_biz_supp_date_idx",
+            ),
+            models.Index(
+                fields=["business", "collected_at"],
+                name="milk_coll_biz_date_idx",
             ),
         ]
 

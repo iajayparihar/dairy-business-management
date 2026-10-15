@@ -245,9 +245,12 @@ def allocate_supplier_advance(
             "Only received purchases can receive allocations."
         )
 
+    # Allocations on cancelled purchases no longer use up the advance
+    # (the balance selector already ignores them).
     existing_allocations = list(
         SupplierPaymentAllocation.objects.filter(
-            payment=payment
+            payment=payment,
+            purchase__status=SupplierPurchase.Status.RECEIVED,
         ).select_related("purchase")
     )
 

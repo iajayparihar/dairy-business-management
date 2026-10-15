@@ -65,6 +65,13 @@ class StockMovement(models.Model):
         blank=True,
         related_name="stock_movements",
     )
+    milk_collection = models.ForeignKey(
+        "purchases.MilkCollection",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stock_movements",
+    )
     reversal_of = models.ForeignKey(
         "self",
         on_delete=models.PROTECT,
@@ -86,6 +93,14 @@ class StockMovement(models.Model):
                 fields=["purchase_line"],
                 condition=Q(movement_type="PURCHASE_RECEIPT"),
                 name="uniq_stock_purchase_receipt",
+            ),
+            models.UniqueConstraint(
+                fields=["milk_collection"],
+                condition=Q(
+                    movement_type="PURCHASE_RECEIPT",
+                    milk_collection__isnull=False,
+                ),
+                name="uniq_stock_milk_receipt",
             ),
             models.UniqueConstraint(
                 fields=["delivery"],
@@ -128,3 +143,50 @@ class StockMovement(models.Model):
             f"{self.product.name} - {self.movement_type} "
             f"- {self.quantity}"
         )
+
+
+class BusinessMilkConfig(models.Model):
+    """
+    Which catalog product holds a business's raw cow / buffalo milk stock.
+    Milk collections post stock to these products. No mapping means no
+    stock is posted (and nothing is back-posted when one is added later).
+    """
+
+    business = models.OneToOneField(
+        Business, on_delete=models.CASCADE, related_name="milk_config"
+    )
+    cow_product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    buffalo_product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "inventory_business_milk_config"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(cow_product__isnull=True)
+                    | Q(buffalo_product__isnull=True)
+                    | ~Q(cow_product=models.F("buffalo_product"))
+                ),
+                name="milk_config_distinct_products",
+            ),
+        ]

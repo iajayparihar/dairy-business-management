@@ -13,7 +13,7 @@ Read ARCHITECTURE.md and ROADMAP.md first. Django + DRF + PostgreSQL, multi-tena
 ## Production-grade planning checklist (do this BEFORE presenting any plan)
 Past plans needed several revisions because these were found late. Inspect the real code first (models, constraints, services, selectors, migrations, tests), then answer each item in the plan itself:
 1. **Reuse existing policy**: find how the codebase already decides the same question (e.g. stock shortfall is recorded and flagged, never blocked; statements already filter `status=RECEIVED`). Do not invent a second rule.
-2. **Concurrency**: name every writer of the same rows and the global lock order (purchase -> payment; route run -> delivery -> product). New writers must follow it; add a real threaded/transaction test, not only a sequential one.
+2. **Concurrency**: name every writer of the same rows and the global lock order (purchase -> payment; route run -> delivery -> product). New writers must follow it; add a real threaded/transaction test, not only a sequential one. Postgres FOR UPDATE on a parent row also blocks FK inserts into it: use `no_key=True` for parent rows. Check a design premise ("X must be blocked") against how balances/selectors already treat the case before building it.
 3. **Idempotency**: `client_ref` replay compares the full normalized request (including defaulted fields like shift and time); same ref + different data is an error.
 4. **Uniqueness**: every generated or supplied identifier has a DB constraint, not only an app check.
 5. **Time**: use `Business.timezone`; day ranges are half-open `[start, next_day_start)`; corrections keep the original timestamp and re-resolve the rate at that time.
@@ -39,9 +39,9 @@ Also: when the owner pastes an external review, verify every claim against the c
 - COW requests that include a `fat` key (even 0) are rejected with 400; BUFFALO requires fat > 0.
 - One MilkCollection row per can, with shift (MORNING/EVENING). The user may pick the shift; if omitted it is derived from the request's `collected_at` in the business timezone (before 15:00 = morning).
 - Can label / collection_number is server-generated only (client cannot send it): `<SUPPLIER_CODE>-<YYMMDD>-<M|E>-<C|B><seq>`, e.g. RAM01-261015-M-B2. Never reused, even after cancel.
-- Milk entries are never deleted: cancel with reason, or Correct (cancel + replacement at the original time/shift). Cancel/Correct is blocked if a payment is allocated; reverse the payment first.
+- Milk entries are never deleted: cancel with reason, or Correct (cancel + replacement at the original time/shift). Cancel/Correct is ALLOWED even if a payment is allocated: balances and the allocator ignore allocations on CANCELLED purchases, so the money returns to the supplier's available credit (the earlier "blocked" idea was wrong - verified in apps/payments/selectors.py).
 - If cancelling consumed milk makes stock negative: allow and flag the shortfall (same as deliveries), never block.
-- Lock order for milk: purchase -> collection -> product.
+- Lock order for milk: business (select_for_update(no_key=True)) -> purchase -> collection -> product. Never use a plain FOR UPDATE on the Business row: it blocks every INSERT that references the business and deadlocks against purchase/payment locks (found by the cancel-vs-correct race test).
 - Milk bought posts to stock via a per-business Cow/Buffalo product mapping.
 - Purchase corrections use Option D (returns and corrections through the immutable PurchaseAdjustment ledger).
 - Deliveries can never be deleted; stock timestamp policy is ARCHITECTURE.md section 13.

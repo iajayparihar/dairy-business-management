@@ -35,23 +35,29 @@ class SupplierPurchaseAdmin(admin.ModelAdmin):
 
 @admin.register(MilkCollection)
 class MilkCollectionAdmin(admin.ModelAdmin):
+    """Ledger rows: read-only, never added or deleted here."""
+
     list_display = (
         "collection_number",
         "business",
         "supplier",
         "collected_at",
+        "shift",
+        "status",
         "litres",
         "amount",
-        "created_by",
     )
-    list_filter = ("business", "milk_type")
+    list_filter = ("business", "milk_type", "shift", "status")
     search_fields = (
         "collection_number",
         "supplier__name",
     )
-    readonly_fields = ("created_by", "created_at")
 
-    def save_model(self, request, obj, form, change):
-        if not change:
-            obj.created_by = request.user
-        super().save_model(request, obj, form, change)
+    def get_readonly_fields(self, request, obj=None):
+        return [f.name for f in self.model._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

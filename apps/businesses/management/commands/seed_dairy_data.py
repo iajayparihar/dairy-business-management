@@ -11,6 +11,7 @@ from apps.businesses.models import Business, BusinessMembership
 from apps.businesses.services import create_business
 from apps.customers.models import Customer
 from apps.deliveries.services import create_delivery
+from apps.inventory.models import BusinessMilkConfig
 from apps.products.models import Product, ProductCategory, ProductPrice
 from apps.suppliers.models import Supplier
 
@@ -166,11 +167,13 @@ class Command(BaseCommand):
         product_data = {
             "abhigyan": [
                 ("MILK", "Cow Milk", Product.Unit.LITRE, "60.00"),
+                ("MILK-BUF", "Buffalo Milk", Product.Unit.LITRE, "80.00"),
                 ("GHEE", "Cow Ghee", Product.Unit.KILOGRAM, "800.00"),
                 ("DAHI", "Dahi", Product.Unit.KILOGRAM, "100.00"),
             ],
             "vij": [
                 ("MILK", "Cow Milk", Product.Unit.LITRE, "70.00"),
+                ("MILK-BUF", "Buffalo Milk", Product.Unit.LITRE, "90.00"),
                 ("GHEE", "Cow Ghee", Product.Unit.KILOGRAM, "500.00"),
                 ("DAHI", "Dahi", Product.Unit.KILOGRAM, "80.00"),
             ],
@@ -286,6 +289,21 @@ class Command(BaseCommand):
                     ],
                     notes="Seed demo delivery",
                 )
+
+        # --------------------------------------------------
+        # 7. RAW MILK STOCK MAPPING (after the demo deliveries, so
+        #    they are not turned into stock shortfalls)
+        # --------------------------------------------------
+        for business_key, business in businesses.items():
+            cow = products[business_key]["MILK"]
+            buffalo = products[business_key]["MILK-BUF"]
+            Product.objects.filter(
+                pk__in=[cow.pk, buffalo.pk],
+            ).update(track_stock=True)
+            BusinessMilkConfig.objects.update_or_create(
+                business=business,
+                defaults={"cow_product": cow, "buffalo_product": buffalo},
+            )
 
         self.stdout.write(
             self.style.SUCCESS(

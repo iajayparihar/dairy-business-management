@@ -9,6 +9,11 @@ from apps.purchases.api_views import (
     PurchaseDetailAPIView,
     PurchaseListCreateAPIView,
     PurchaseReceiveAPIView,
+    BusinessMilkCollectionListAPIView,
+    BusinessMilkConfigAPIView,
+    MilkDailySummaryAPIView,
+    MilkCollectionCancelAPIView,
+    MilkCollectionCorrectAPIView,
     MilkCollectionDetailAPIView,
     MilkCollectionListCreateAPIView,
 )
@@ -27,6 +32,33 @@ urlpatterns = [
         "<uuid:supplier_id>/milk-collections/<uuid:collection_id>/",
         MilkCollectionDetailAPIView.as_view(),
         name="milk-collection-detail",
+    ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/milk-collections/<uuid:collection_id>/cancel/",
+        MilkCollectionCancelAPIView.as_view(),
+        name="milk-collection-cancel",
+    ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/milk-collections/<uuid:collection_id>/correct/",
+        MilkCollectionCorrectAPIView.as_view(),
+        name="milk-collection-correct",
+    ),
+    path(
+        "businesses/<uuid:business_id>/milk-collections/",
+        BusinessMilkCollectionListAPIView.as_view(),
+        name="business-milk-collections",
+    ),
+    path(
+        "businesses/<uuid:business_id>/milk-collections/daily-summary/",
+        MilkDailySummaryAPIView.as_view(),
+        name="milk-daily-summary",
+    ),
+    path(
+        "businesses/<uuid:business_id>/milk-config/",
+        BusinessMilkConfigAPIView.as_view(),
+        name="milk-config",
     ),
     path(
         "businesses/<uuid:business_id>/purchases/",

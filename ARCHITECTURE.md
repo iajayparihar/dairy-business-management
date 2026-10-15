@@ -125,7 +125,8 @@ Key tables and rules:
 | `Delivery` | One row per customer × product × day. `unit_price` is a snapshot of the price at delivery time; `line_total` is computed; check constraints on quantity/price/total. Created via `create_delivery`, which also writes a `DELIVERY` stock movement. |
 | `Supplier` | Milk/product supplier per business. |
 | `SupplierMilkRate` | Rate per milk type with `effective_from` / `effective_to`; resolved by `resolve_supplier_milk_rate`. |
-| `MilkCollection` | One milk intake: litres, fat, milk type, the rate applied (snapshot) and computed amount, linked 1:1 to a `SupplierPurchase`. Amount = `calculate_supplier_milk_amount(litres, fat, rate)`. |
+| `MilkCollection` | One can of milk: milk type, shift, litres, the rate applied and `pricing_basis` (snapshots) and computed amount, linked 1:1 to a `SupplierPurchase`. BUFFALO = litres × fat × rate (`FAT`); COW = litres × rate (`FLAT`, fat not recorded). Label (`collection_number`) is server-generated, e.g. `RAM01-261015-M-B2`. Never deleted: `status` RECORDED / CANCELLED with reason, `replaces` links a correction. See §15. |
+| `BusinessMilkConfig` | Per business: which product holds raw cow / buffalo milk stock. |
 | `SupplierPurchase` / `PurchaseLine` | Draft → Received lifecycle. Receiving writes `PURCHASE_RECEIPT` stock movements (unique per line). |
 | `StockMovement` | Append-only ledger: `PURCHASE_RECEIPT`, `DELIVERY`, `WASTAGE`, `ADJUSTMENT_IN/OUT`, `REVERSAL_IN/OUT`. Stock balance = sum of movements. Partial unique constraints stop double-posting a receipt or delivery. |
 | `SupplierPayment` | Immutable ledger row (custom queryset blocks update/delete). Supports advances. |
@@ -142,7 +143,8 @@ Design choices on the ledger tables: payments and stock movements are **append-o
 | Customers | `businesses/{b}/customers/` · `customers/{id}/` |
 | Deliveries | `businesses/{b}/deliveries/` (list/create) |
 | Suppliers | `businesses/{b}/suppliers/` · `suppliers/{id}/` · `suppliers/{s}/milk-rates/` |
-| Milk purchase | `businesses/{b}/suppliers/{s}/milk-collections/` · `.../{collection_id}/` |
+| Milk purchase | `businesses/{b}/suppliers/{s}/milk-collections/` · `.../{id}/` · `.../{id}/cancel/` · `.../{id}/correct/` |
+| Milk (business-wide) | `businesses/{b}/milk-collections/` · `.../daily-summary/?date=` · `businesses/{b}/milk-config/` |
 | Payments | `businesses/{b}/suppliers/{s}/payments/` · `suppliers/{s}/statement/` |
 | Auth | see §5 |
 
@@ -157,7 +159,7 @@ Not yet exposed over the API (models/services exist): purchases CRUD + receive, 
 
 **Record a milk collection** — `POST /businesses/{b}/suppliers/{s}/milk-collections/`
 1. Same auth/tenant checks.
-2. `create_milk_collection` (atomic): resolves the supplier's rate for that milk type and time, computes amount from litres × fat × rate, creates the linked purchase and the collection.
+2. `create_milk_collection` (atomic, business row locked): resolves shift and label, replays an identical `client_ref`, resolves the supplier's rate for that milk type and time, computes the amount (see §15), creates the linked purchase and the collection, posts a `PURCHASE_RECEIPT` stock movement when a product is mapped, then auto-applies supplier advances.
 
 **Supplier statement** — `GET .../suppliers/{s}/statement/?start=&end=`
 `get_supplier_account_statement` sums purchases vs. payments/allocations in the period and returns opening balance, entries, closing balance (positive = we owe supplier, negative = advance).
@@ -217,3 +219,15 @@ Rules:
 - A run closes only when no visit is PENDING. Closed runs block cancel/correct until an owner/manager reopens with a reason.
 - Cancelling a visit's only delivery puts the visit back to PENDING.
 - Endpoints under `/api/v1/businesses/{id}/`: `routes/`, `routes/{id}/customers/`, `standing-orders/`, `route-runs/`, `route-runs/{id}/tasks|entries|close|reopen/`, `deliveries/{id}/` and `deliveries/{id}/cancel/`.
+
+## 15. Milk collections (Phase 3)
+
+- **Pricing**: BUFFALO litres × fat × rate; COW litres × rate. A COW request containing `fat` (even 0) is rejected (400); BUFFALO needs fat > 0. `pricing_basis` is snapshotted, so old rows keep their meaning.
+- **One row per can**, many per supplier / shift / day. `shift` may be sent; if omitted it is derived from `collected_at` in `Business.timezone` (before 15:00 = MORNING).
+- **Label** `<SUPPLIER_CODE>-<YYMMDD>-<M|E>-<C|B><seq>` is generated under the business lock; `seq` counts every row ever written (cancelled included), so it is never reused. Clients cannot send it.
+- **Retry safety**: `client_ref` unique per business. Same ref + identical request returns the original (HTTP 200, nothing new written); same ref + any difference is HTTP 409.
+- **Stock**: `BusinessMilkConfig` maps cow / buffalo to products (same business, tracked, litres, different products). Mapped → a receipt at `collected_at`; unmapped → collection still succeeds and `stock_posted=false`. Adding a mapping never back-posts.
+- **Cancel / Correct** (OWNER/MANAGER): reason required (≥ 3 chars); rows are kept. Cancel marks the entry and its purchase CANCELLED and posts a `REVERSAL_OUT` at the receipt's `occurred_at`. Correct = cancel + a replacement at the original time and shift (rate resolved at that time), in one transaction. If the milk was already used and stock goes negative the action still succeeds and `cancel_stock_shortfall` records the missing litres (same policy as deliveries). Paid entries can be cancelled: balances and the allocator ignore allocations on cancelled purchases, so the money returns to the supplier's credit and is reusable.
+- **Lock order**: business (`select_for_update(no_key=True)`) → purchase → collection → product. `allocate_supplier_advance` locks purchase → payment, so a payment can never be allocated to a purchase being cancelled. Never take a plain `FOR UPDATE` on the Business row: it blocks every insert that references the business and deadlocks against purchase/payment locks.
+- **Reports**: `daily-summary` uses half-open business-local days `[start, next_day_start)`, excludes cancelled entries, and reports a litre-weighted average fat over buffalo only. Lists are paginated and filterable (`start_date`, `end_date`, `shift`, `milk_type`, `status`, `supplier`). All milk endpoints are OWNER/MANAGER only (cost data).
+- **Known limitation**: a cancelled purchase disappears from supplier statements for every date (statements filter `status=RECEIVED`), including statements previously issued for an earlier date.

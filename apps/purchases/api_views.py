@@ -1,23 +1,52 @@
 
+import uuid
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date
 
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
+from apps.common.pagination import StandardPagination
 from apps.purchases.api_serializers import (
+    MilkCollectionCancelSerializer,
+    MilkCollectionCorrectSerializer,
     MilkCollectionCreateSerializer,
     MilkCollectionReadSerializer,
+    MilkConfigSerializer,
+)
+from apps.purchases.milk_queries import (
+    filter_milk_collections,
+    milk_daily_summary,
 )
 from apps.purchases.models import MilkCollection
-from apps.purchases.services import create_milk_collection
+from django.db.models import Exists, OuterRef
+
+from apps.inventory.models import BusinessMilkConfig, StockMovement
+from apps.inventory.services import set_milk_config
+from apps.purchases.services import (
+    ClientRefConflict,
+    cancel_milk_collection,
+    correct_milk_collection,
+    create_milk_collection,
+)
 from apps.suppliers.models import Supplier
+
+
+def with_stock_posted(queryset):
+    return queryset.annotate(stock_posted=Exists(
+        StockMovement.objects.filter(
+            milk_collection=OuterRef("pk"),
+            movement_type=StockMovement.MovementType.PURCHASE_RECEIPT,
+        )
+    ))
 
 
 def raise_api_validation_error(exc):
@@ -28,17 +57,15 @@ def raise_api_validation_error(exc):
 
 
 class MilkCollectionPermissionMixin:
+    """Milk entries carry cost data: OWNER/MANAGER only, reads included."""
+
     permission_classes = [IsAuthenticated, IsBusinessMember]
 
     def get_permissions(self):
-        if self.request.method not in ("GET", "HEAD", "OPTIONS"):
-            self.required_business_roles = [
-                BusinessMembership.Role.OWNER,
-                BusinessMembership.Role.MANAGER,
-            ]
-        else:
-            self.required_business_roles = None
-
+        self.required_business_roles = [
+            BusinessMembership.Role.OWNER,
+            BusinessMembership.Role.MANAGER,
+        ]
         return super().get_permissions()
 
     def get_supplier(self):
@@ -56,41 +83,22 @@ class MilkCollectionListCreateAPIView(
     MilkCollectionPermissionMixin,
     generics.ListCreateAPIView,
 ):
+    pagination_class = StandardPagination
+
     def get_queryset(self):
         supplier = self.get_supplier()
 
-        queryset = MilkCollection.objects.filter(
+        queryset = with_stock_posted(MilkCollection.objects.filter(
             business_id=self.request.business.id,
             supplier_id=supplier.id,
-        ).select_related("rate_record", "purchase")
+        ).select_related("rate_record", "purchase"))
 
-        start_date = self.request.query_params.get("start_date")
-        end_date = self.request.query_params.get("end_date")
-
-        if start_date:
-            parsed_start = parse_date(start_date)
-            if parsed_start is None:
-                raise ValidationError({
-                    "start_date": "Use YYYY-MM-DD format."
-                })
-            queryset = queryset.filter(
-                collected_at__date__gte=parsed_start,
+        try:
+            queryset = filter_milk_collections(
+                queryset, self.request.query_params, self.request.business,
             )
-
-        if end_date:
-            parsed_end = parse_date(end_date)
-            if parsed_end is None:
-                raise ValidationError({
-                    "end_date": "Use YYYY-MM-DD format."
-                })
-            queryset = queryset.filter(
-                collected_at__date__lte=parsed_end,
-            )
-
-        if start_date and end_date and parsed_start > parsed_end:
-            raise ValidationError({
-                "end_date": "Must be on or after start_date."
-            })
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
 
         return queryset.order_by("-collected_at", "-created_at")
 
@@ -110,28 +118,34 @@ class MilkCollectionListCreateAPIView(
             collection = create_milk_collection(
                 business_id=request.business.id,
                 supplier_id=supplier.id,
-                collection_number=data["collection_number"],
                 milk_type=data["milk_type"],
                 collected_at=data["collected_at"],
+                shift=data.get("shift"),
+                client_ref=data.get("client_ref"),
                 litres=data["litres"],
-                fat=data["fat"],
+                fat=data.get("fat"),
                 user=request.user,
+            )
+        except ClientRefConflict as exc:
+            return Response(
+                exc.message_dict, status=status.HTTP_409_CONFLICT,
             )
         except DjangoValidationError as exc:
             raise_api_validation_error(exc)
         except IntegrityError:
             # Database constraints remain the final duplicate guard.
-            raise ValidationError({
-                "collection_number": (
-                    "This collection or its linked purchase number "
-                    "already exists."
-                )
-            })
+            raise ValidationError(
+                "This milk entry conflicts with an existing record. "
+                "Please retry."
+            )
 
         output = MilkCollectionReadSerializer(collection)
         return Response(
             output.data,
-            status=status.HTTP_201_CREATED,
+            status=(
+                status.HTTP_200_OK if collection.replayed
+                else status.HTTP_201_CREATED
+            ),
         )
 
 
@@ -145,10 +159,176 @@ class MilkCollectionDetailAPIView(
     def get_queryset(self):
         supplier = self.get_supplier()
 
-        return MilkCollection.objects.filter(
+        return with_stock_posted(MilkCollection.objects.filter(
             business_id=self.request.business.id,
             supplier_id=supplier.id,
-        ).select_related("rate_record", "purchase")
+        ).select_related("rate_record", "purchase"))
+
+
+class BusinessMilkCollectionListAPIView(
+    MilkCollectionPermissionMixin,
+    generics.ListAPIView,
+):
+    """Every supplier's entries for the business (filters + pagination)."""
+
+    serializer_class = MilkCollectionReadSerializer
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        queryset = with_stock_posted(MilkCollection.objects.filter(
+            business_id=self.request.business.id,
+        ).select_related("rate_record", "purchase"))
+
+        supplier = self.request.query_params.get("supplier")
+        if supplier:
+            try:
+                supplier = uuid.UUID(supplier)
+            except ValueError:
+                raise ValidationError({"supplier": "Enter a valid id."})
+            queryset = queryset.filter(supplier_id=supplier)
+
+        try:
+            queryset = filter_milk_collections(
+                queryset, self.request.query_params, self.request.business,
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+
+        return queryset.order_by("-collected_at", "-created_at")
+
+
+class MilkDailySummaryAPIView(MilkCollectionPermissionMixin, APIView):
+    def get(self, request, business_id):
+        raw = request.query_params.get("date")
+        day = parse_date(raw) if raw else None
+        if day is None:
+            raise ValidationError({"date": "Required, use YYYY-MM-DD."})
+
+        supplier_id = request.query_params.get("supplier")
+        if supplier_id:
+            try:
+                supplier_id = uuid.UUID(supplier_id)
+            except ValueError:
+                raise ValidationError({"supplier": "Enter a valid id."})
+
+        try:
+            summary = milk_daily_summary(
+                business=request.business, day=day,
+                supplier_id=supplier_id or None,
+            )
+        except Supplier.DoesNotExist:
+            raise NotFound("Supplier not found.")
+
+        return Response(summary)
+
+
+class MilkCollectionActionMixin(MilkCollectionPermissionMixin):
+    """Cancel/correct: the entry must belong to this supplier + business."""
+
+    def get_collection(self):
+        supplier = self.get_supplier()
+        return get_object_or_404(
+            MilkCollection.objects.filter(
+                business_id=self.request.business.id,
+                supplier_id=supplier.id,
+            ),
+            pk=self.kwargs["collection_id"],
+        )
+
+    def read(self, collection_id):
+        return MilkCollectionReadSerializer(
+            with_stock_posted(MilkCollection.objects.filter(
+                pk=collection_id,
+            )).get()
+        ).data
+
+
+class MilkCollectionCancelAPIView(MilkCollectionActionMixin, APIView):
+    def post(self, request, **kwargs):
+        collection = self.get_collection()
+        serializer = MilkCollectionCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            cancel_milk_collection(
+                business_id=request.business.id,
+                collection_id=collection.id,
+                user=request.user,
+                reason=serializer.validated_data["reason"],
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+
+        return Response(self.read(collection.id))
+
+
+class MilkCollectionCorrectAPIView(MilkCollectionActionMixin, APIView):
+    def post(self, request, **kwargs):
+        collection = self.get_collection()
+        serializer = MilkCollectionCorrectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            new = correct_milk_collection(
+                business_id=request.business.id,
+                collection_id=collection.id,
+                user=request.user,
+                reason=data["reason"],
+                litres=data["litres"],
+                fat=data.get("fat"),
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+
+        return Response({
+            "collection": self.read(new.id),
+            "cancelled_collection": self.read(collection.id),
+            "stock_shortfall": new.replaces.cancel_stock_shortfall,
+        })
+
+
+class BusinessMilkConfigAPIView(APIView):
+    """Which products hold raw cow / buffalo milk stock (OWNER/MANAGER)."""
+
+    permission_classes = [IsAuthenticated, IsBusinessMember]
+
+    def get_permissions(self):
+        self.required_business_roles = [
+            BusinessMembership.Role.OWNER,
+            BusinessMembership.Role.MANAGER,
+        ]
+        return super().get_permissions()
+
+    @staticmethod
+    def _body(config):
+        return {
+            "cow_product": config and config.cow_product_id,
+            "buffalo_product": config and config.buffalo_product_id,
+        }
+
+    def get(self, request, business_id):
+        config = BusinessMilkConfig.objects.filter(
+            business_id=request.business.id,
+        ).first()
+        return Response(self._body(config))
+
+    def put(self, request, business_id):
+        serializer = MilkConfigSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            config = set_milk_config(
+                business_id=request.business.id,
+                cow_product_id=data["cow_product"],
+                buffalo_product_id=data["buffalo_product"],
+                user=request.user,
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+
+        return Response(self._body(config))
 
 
 # ---- General supplier purchases (draft -> received / cancelled) ----

@@ -11,7 +11,7 @@ Legend: ✅ done · 🟡 partial · ❌ not started
 | 0 | Foundation (tenancy, auth, roles) | ✅ |
 | 1 | Catalog: products, prices, customers | ✅ |
 | 2 | Door-to-door deliveries | ✅ |
-| 3 | Milk purchase from suppliers | 🟡 |
+| 3 | Milk purchase from suppliers | ✅ |
 | 4 | Supplier payments and statements | 🟡 |
 | 5 | Customer billing, payments, credit | ❌ |
 | 6 | Shop counter sales | ❌ |
@@ -57,7 +57,7 @@ Client need: delivery boy taps a customer and records litres (cow / buffalo) plu
 - ❌ Customer-facing confirmation (moved to Phase 10)
 - ❌ Standing-order pause/holiday, customer on vacation (not requested yet)
 
-## Phase 3 — Milk purchase from suppliers 🟡
+## Phase 3 — Milk purchase from suppliers ✅
 
 Client need: log daily milk from each village supplier with litres + fat; amount auto-calculated; rates differ per supplier.
 
@@ -66,12 +66,14 @@ Client need: log daily milk from each village supplier with litres + fat; amount
 - ✅ `MilkCollection` with rate snapshot and auto amount (litres × fat × rate)
 - ✅ Purchase draft → received lifecycle and purchase lines (service level)
 - ✅ API: milk collections list / create / detail
-- ❌ Fixed-rate-per-litre mode for cow milk (client uses e.g. ₹37–40 flat; verify current calculation supports it)
-- ❌ Multiple cans per supplier per day, shift (morning/evening)
-- ❌ Daily total: litres bought, total cost, average fat
+- ✅ Cow milk is a flat rate per litre (no fat); buffalo stays litres × fat × rate; `pricing_basis` snapshotted
+- ✅ One row per can with shift (morning/evening) and a server-generated label (e.g. `RAM01-261015-M-B2`); retry-safe `client_ref`
+- ✅ Daily total: litres bought, total cost, litre-weighted average fat (buffalo), per type and shift; business-wide paginated list with filters
+- ✅ Milk entries cancel / correct with audit (never deleted); milk bought posts to stock via per-business product mapping (`milk-config`); negative stock after cancelling used milk is flagged, not blocked
 - ✅ API for general purchases under `/api/v1/businesses/<id>/purchases/` (list with filters + pagination, create draft, detail, PATCH draft, `receive/`, `cancel/`); OWNER/MANAGER only; draft cancellation audited (`cancelled_at/by`, reason), no stock or payment effect
 - ✅ Corrections to received purchases (Option D confirmed): goods returns (partial/full) and quantity/price mistake corrections via `returns/`, `corrections/`, `adjustments/`. Immutable `PurchaseAdjustment` ledger; original purchase untouched; payable = `total_amount` + adjustments (`SupplierPurchase.net_amount`); stock via `REVERSAL_OUT` / `ADJUSTMENT_IN` movements; statements show `PURCHASE_RETURN` / `PURCHASE_CORRECTION`
-- ❌ Returns/corrections for milk-collection purchases (they have no lines); refund-due tracking when a paid purchase is returned (shows as negative statement balance only)
+- ❌ Physical goods return of milk and refund-due tracking when a paid purchase is returned (shows as negative statement balance only)
+- ❌ Fat-based cow milk (not needed now; add `pricing_basis` handling when the client asks)
 
 ## Phase 4 — Supplier payments and statements 🟡
 

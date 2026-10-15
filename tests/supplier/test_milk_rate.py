@@ -196,6 +196,7 @@ class SupplierMilkRateServiceTests(TestCase):
             litres="10",
             fat="9",
             rate="15",
+            milk_type="BUFFALO",
         )
         self.assertEqual(amount, Decimal("1350.00"))
 
@@ -205,6 +206,7 @@ class SupplierMilkRateServiceTests(TestCase):
             litres="1",
             fat="1",
             rate="1.005",
+            milk_type="BUFFALO",
         )
         self.assertEqual(amount, Decimal("1.01"))
 
@@ -215,6 +217,7 @@ class SupplierMilkRateServiceTests(TestCase):
                 litres="-1",
                 fat="9",
                 rate="15",
+                milk_type="BUFFALO",
             )
 
 
@@ -224,6 +227,7 @@ class SupplierMilkRateServiceTests(TestCase):
                 litres="10",
                 fat="-1",
                 rate="15",
+                milk_type="BUFFALO",
             )
 
 
@@ -286,12 +290,15 @@ class SupplierMilkRateServiceTests(TestCase):
 
 
     def test_supplier_milk_amount_returns_rate_snapshot_values(self):
-        self.create_rate(rate=Decimal("15.00"))
+        self.create_rate(
+            rate=Decimal("15.00"),
+            milk_type=SupplierMilkRate.MilkType.BUFFALO,
+        )
 
         result = calculate_supplier_milk_amount(
             business_id=self.business.id,
             supplier_id=self.supplier.id,
-            milk_type=SupplierMilkRate.MilkType.COW,
+            milk_type=SupplierMilkRate.MilkType.BUFFALO,
             collected_at=self.start,
             litres="10",
             fat="9",

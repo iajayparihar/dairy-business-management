@@ -72,7 +72,7 @@ class MilkCollectionServiceTests(TestCase):
         self.rate = SupplierMilkRate.objects.create(
             business=self.business,
             supplier=self.supplier,
-            milk_type=SupplierMilkRate.MilkType.COW,
+            milk_type=SupplierMilkRate.MilkType.BUFFALO,
             rate=Decimal("15.00"),
             effective_from=self.start - timedelta(hours=1),
             created_by=self.owner,
@@ -82,8 +82,7 @@ class MilkCollectionServiceTests(TestCase):
         data = {
             "business_id": self.business.id,
             "supplier_id": self.supplier.id,
-            "collection_number": "MC-001",
-            "milk_type": MilkCollection.MilkType.COW,
+            "milk_type": MilkCollection.MilkType.BUFFALO,
             "collected_at": self.start,
             "litres": "10",
             "fat": "9",
@@ -106,19 +105,11 @@ class MilkCollectionServiceTests(TestCase):
         self.assertEqual(collection.amount, Decimal("1350.00"))
         self.assertEqual(collection.rate_record, self.rate)
 
-    def test_duplicate_collection_number_is_rejected(self):
-        self.create_collection()
-
-        with self.assertRaises(ValidationError):
-            self.create_collection()
-
-        self.assertEqual(MilkCollection.objects.count(), 1)
-        self.assertEqual(SupplierPurchase.objects.count(), 1)
-
     def test_collection_without_applicable_rate_is_rejected(self):
         with self.assertRaises(ValidationError):
             self.create_collection(
-                milk_type=MilkCollection.MilkType.BUFFALO,
+                milk_type=MilkCollection.MilkType.COW,
+                fat=None,
             )
 
         self.assertEqual(MilkCollection.objects.count(), 0)
@@ -176,7 +167,7 @@ class MilkCollectionServiceTests(TestCase):
         SupplierMilkRate.objects.create(
             business=self.business,
             supplier=self.supplier,
-            milk_type=SupplierMilkRate.MilkType.COW,
+            milk_type=SupplierMilkRate.MilkType.BUFFALO,
             rate=Decimal("20.00"),
             effective_from=change_time,
             created_by=self.owner,
@@ -202,7 +193,10 @@ class MilkCollectionServiceTests(TestCase):
 
         self.assertEqual(purchase.business, self.business)
         self.assertEqual(purchase.supplier, self.supplier)
-        self.assertEqual(purchase.purchase_number, "MILK-MC-001")
+        self.assertEqual(
+            purchase.purchase_number,
+            f"MILK-{collection.collection_number}",
+        )
         self.assertEqual(
             purchase.status,
             SupplierPurchase.Status.RECEIVED,
@@ -249,9 +243,7 @@ class MilkCollectionServiceTests(TestCase):
 
     def test_failed_collection_does_not_create_partial_payable(self):
         with self.assertRaises(ValidationError):
-            self.create_collection(
-                collection_number="",
-            )
+            self.create_collection(litres="0")
 
         self.assertEqual(MilkCollection.objects.count(), 0)
         self.assertEqual(SupplierPurchase.objects.count(), 0)
@@ -268,7 +260,7 @@ class MilkCollectionServiceTests(TestCase):
         SupplierMilkRate.objects.create(
             business=self.business,
             supplier=self.supplier,
-            milk_type=SupplierMilkRate.MilkType.COW,
+            milk_type=SupplierMilkRate.MilkType.BUFFALO,
             rate=Decimal("20.00"),
             effective_from=change_time,
             created_by=self.owner,
@@ -282,11 +274,8 @@ class MilkCollectionServiceTests(TestCase):
         self.assertEqual(purchase.total_amount, Decimal("1350.00"))
 
     def test_different_collection_numbers_create_separate_payables(self):
-        first = self.create_collection(
-            collection_number="MC-101",
-        )
+        first = self.create_collection()
         second = self.create_collection(
-            collection_number="MC-102",
             collected_at=self.start + timedelta(minutes=5),
         )
 
