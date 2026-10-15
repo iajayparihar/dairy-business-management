@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
@@ -89,10 +89,8 @@ def create_delivery(
             "business": "The business does not exist or is inactive."
         }) from exc
 
-    # The customer lock serializes concurrent submissions for the same
-    # customer, which makes the replay and duplicate checks below safe.
     try:
-        customer = Customer.objects.select_for_update().get(
+        customer = Customer.objects.get(
             pk=customer_id,
             business=business,
             is_active=True,
@@ -106,7 +104,10 @@ def create_delivery(
             )
         }) from exc
 
-    # The product lock serializes the stock check per product.
+    # The product lock serializes, per product, the duplicate check, the
+    # client_ref replay and the stock check below. Anything it cannot cover
+    # (e.g. one client_ref reused across products) is caught by the unique
+    # constraints and reported at the insert.
     try:
         product = Product.objects.select_for_update().get(
             pk=product_id,
@@ -203,21 +204,28 @@ def create_delivery(
             Decimal("0"),
         )
 
-    delivery = Delivery.objects.create(
-        business=business,
-        customer=customer,
-        product=product,
-        delivered_at=delivered_at,
-        shift=shift,
-        quantity=quantity,
-        unit_price=unit_price,
-        stock_shortfall=shortfall,
-        client_ref=client_ref or None,
-        notes=notes,
-        created_by=user,
-        replaces=replaces,
-        visit=visit,
-    )
+    try:
+        with transaction.atomic():  # savepoint: keeps the outer txn usable
+            delivery = Delivery.objects.create(
+                business=business,
+                customer=customer,
+                product=product,
+                delivered_at=delivered_at,
+                shift=shift,
+                quantity=quantity,
+                unit_price=unit_price,
+                stock_shortfall=shortfall,
+                client_ref=client_ref or None,
+                notes=notes,
+                created_by=user,
+                replaces=replaces,
+                visit=visit,
+            )
+    except IntegrityError as exc:
+        raise ValidationError(
+            "A conflicting delivery or client reference was just recorded. "
+            "Refresh and retry with a new reference."
+        ) from exc
 
     if product.track_stock:
         StockMovement.objects.create(
@@ -346,11 +354,43 @@ MANAGE_ROLES = [
 
 
 def _lock_delivery(business_id, delivery_id):
-    """Lock a delivery of this business; raises Delivery.DoesNotExist."""
-    return Delivery.objects.select_for_update().get(
-        pk=delivery_id,
-        business_id=business_id,
+    """
+    Lock a delivery for cancellation/correction; raises Delivery.DoesNotExist.
+
+    Global lock order, used by every writer so none can deadlock:
+        route run -> delivery -> product
+    The run lock is what makes "run is CLOSED" a stable fact: close_run,
+    reopen_run, record_entry and this function all take it first, so a
+    delivery can never be changed in a run that closes underneath it.
+    This is also the single place a future "delivery is on a locked bill"
+    rule belongs (check it here, after the locks).
+    """
+    from apps.routes.models import RouteRun
+
+    # A delivery's visit never changes, so peeking without a lock is safe.
+    visit_id = Delivery.objects.filter(
+        pk=delivery_id, business_id=business_id,
+    ).values_list("visit_id", flat=True).get()
+
+    run = None
+    if visit_id:
+        run = RouteRun.objects.select_for_update().get(visits__pk=visit_id)
+
+    delivery = Delivery.objects.select_for_update().get(
+        pk=delivery_id, business_id=business_id,
     )
+
+    if run is not None and run.status == RouteRun.Status.CLOSED:
+        raise ValidationError(
+            "This delivery belongs to a closed route run. "
+            "Reopen the run to correct it."
+        )
+
+    # Same lock create_delivery takes, so the stock reversal cannot
+    # interleave with a concurrent shortfall calculation.
+    Product._base_manager.select_for_update().get(pk=delivery.product_id)
+
+    return delivery
 
 
 def _clean_reason(reason):
@@ -364,12 +404,6 @@ def _clean_reason(reason):
 
 def _cancel_locked(delivery, *, user, reason):
     """Cancel an already-locked delivery and reverse its stock."""
-    if delivery.visit_id and delivery.visit.run.status == "CLOSED":
-        raise ValidationError(
-            "This delivery belongs to a closed route run. "
-            "Reopen the run to correct it."
-        )
-
     if delivery.status == Delivery.Status.CANCELLED:
         raise ValidationError("This delivery is already cancelled.")
 

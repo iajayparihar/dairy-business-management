@@ -286,9 +286,9 @@ def record_entry(
     if run.status != RouteRun.Status.OPEN:
         raise ValidationError("This route run is closed.")
 
-    visit = RouteVisit.objects.select_for_update().get(
-        run=run, customer_id=customer_id,
-    )
+    # No visit lock: every writer of a visit (this, cancel, correct) holds
+    # the run lock taken above, so the visit is already serialized.
+    visit = RouteVisit.objects.get(run=run, customer_id=customer_id)
     reason = (reason or "").strip()
 
     if outcome == RouteVisit.Status.DELIVERED:
