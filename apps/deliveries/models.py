@@ -101,6 +101,14 @@ class Delivery(SoftDeleteModel):
         editable=False,
     )
 
+    visit = models.ForeignKey(
+        "routes.RouteVisit",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="deliveries",
+    )
+
     # Client-generated key making retried submissions safe.
     client_ref = models.CharField(max_length=64, null=True, blank=True)
 

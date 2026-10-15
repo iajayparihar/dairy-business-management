@@ -1,5 +1,6 @@
 
 from django.core.exceptions import (
+    ObjectDoesNotExist,
     PermissionDenied as DjangoPermissionDenied,
     ValidationError as DjangoValidationError,
 )
@@ -54,8 +55,8 @@ class DeliveryViewMixin:
         """Call a service, mapping its errors to API responses."""
         try:
             return service(**kwargs)
-        except Delivery.DoesNotExist as exc:
-            raise NotFound("Delivery not found.") from exc
+        except ObjectDoesNotExist as exc:
+            raise NotFound("Not found.") from exc
         except DjangoPermissionDenied as exc:
             raise PermissionDenied(str(exc)) from exc
         except DjangoValidationError as exc:

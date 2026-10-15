@@ -35,6 +35,7 @@ def create_delivery(
     client_ref=None,
     notes="",
     replaces=None,
+    visit=None,
 ):
     """
     Record one product delivered to one customer in one shift.
@@ -215,6 +216,7 @@ def create_delivery(
         notes=notes,
         created_by=user,
         replaces=replaces,
+        visit=visit,
     )
 
     if product.track_stock:
@@ -362,6 +364,12 @@ def _clean_reason(reason):
 
 def _cancel_locked(delivery, *, user, reason):
     """Cancel an already-locked delivery and reverse its stock."""
+    if delivery.visit_id and delivery.visit.run.status == "CLOSED":
+        raise ValidationError(
+            "This delivery belongs to a closed route run. "
+            "Reopen the run to correct it."
+        )
+
     if delivery.status == Delivery.Status.CANCELLED:
         raise ValidationError("This delivery is already cancelled.")
 
@@ -378,7 +386,9 @@ def _cancel_locked(delivery, *, user, reason):
             product_id=delivery.product_id,
             movement_type=StockMovement.MovementType.REVERSAL_IN,
             quantity=original.quantity,
-            occurred_at=now,
+            # Same business time as the original, so the delivery date
+            # nets to zero; created_at records when it was really posted.
+            occurred_at=original.occurred_at,
             reason=f"Cancelled delivery {delivery.pk}: {reason}",
             created_by=user,
             delivery=delivery,
@@ -406,6 +416,15 @@ def cancel_delivery(*, business_id, delivery_id, user, reason):
     reason = _clean_reason(reason)
     delivery = _lock_delivery(business_id, delivery_id)
     _cancel_locked(delivery, user=user, reason=reason)
+
+    # A visit with nothing left delivered is unresolved again.
+    visit = delivery.visit
+    if visit is not None and not visit.deliveries.filter(
+        status=Delivery.Status.DELIVERED,
+    ).exists():
+        visit.status = "PENDING"
+        visit.reason = ""
+        visit.save(update_fields=["status", "reason"])
 
     return delivery
 
@@ -465,4 +484,5 @@ def correct_delivery(
         unit_price=new_price if old.product.allow_open_price else None,
         notes=new_notes,
         replaces=old,
+        visit=old.visit,
     )

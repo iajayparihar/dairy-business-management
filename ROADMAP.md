@@ -10,7 +10,7 @@ Legend: ✅ done · 🟡 partial · ❌ not started
 |---|---|---|
 | 0 | Foundation (tenancy, auth, roles) | ✅ |
 | 1 | Catalog: products, prices, customers | ✅ |
-| 2 | Door-to-door deliveries | 🟡 |
+| 2 | Door-to-door deliveries | ✅ |
 | 3 | Milk purchase from suppliers | 🟡 |
 | 4 | Supplier payments and statements | 🟡 |
 | 5 | Customer billing, payments, credit | ❌ |
@@ -40,18 +40,22 @@ Legend: ✅ done · 🟡 partial · ❌ not started
 - ✅ Effective-dated product prices with no-overlap DB constraint; `change_product_price`
 - ✅ Customers (CRUD API, unique code per business, household/shop/other)
 
-## Phase 2 — Door-to-door deliveries 🟡
+## Phase 2 — Door-to-door deliveries ✅
 
 Client need: delivery boy taps a customer and records litres (cow / buffalo) plus extras, every day.
 
 - ✅ `Delivery` model, price snapshot, check constraints, stock movement on create
-- ✅ API: list / create deliveries
-- ❌ Delivery detail: edit / cancel (with stock reversal)
-- ❌ Fast daily-route entry: customers in route order, one-tap defaults ("same as yesterday")
-- ❌ Mark "not delivered / customer absent" so a day is confirmed either way
-- ❌ Extras at delivery: dahi, ghee, paneer, mawa, "other" with free amount
-- ❌ Delivery boy / route model (who delivered, which customers on which route)
-- ❌ Customer-facing confirmation (optional: customer sees what was delivered)
+- ✅ One delivery per customer / product / date / shift; retry-safe `client_ref`; server-controlled timestamp (staff limited to 48 h back)
+- ✅ Detail, cancel (reason, stock reversal) and correct (cancel + replace at original time); deliveries can never be deleted
+- ✅ Stock shortfall is recorded and flagged, not blocked
+- ✅ Routes: ordered customers per route, standing orders, daily route runs with one visit per customer
+- ✅ Outcomes: delivered / not delivered / absent / skipped; extras and "other" with typed price (`allow_open_price`)
+- ✅ Suggested basket from standing order, else last delivery (quantities only, never prices)
+- ✅ Close (blocked while any visit is pending) with totals; reopen with reason; closed runs block cancel/correct
+- ✅ Delivery boy = STAFF login; sees only assigned runs
+- ✅ Stock timestamp policy (ARCHITECTURE.md §13) and `stock_net_by_date` report helper
+- ❌ Customer-facing confirmation (moved to Phase 10)
+- ❌ Standing-order pause/holiday, customer on vacation (not requested yet)
 
 ## Phase 3 — Milk purchase from suppliers 🟡
 
@@ -164,7 +168,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 ## Next steps (suggested order)
 
 1. **Customer ledger + monthly billing (Phase 5)** — removes the 3–4 day manual task, the client's top problem.
-2. **Delivery entry polish (Phase 2)** — daily route screen data, "not delivered", extras.
+2. ~~Delivery entry (Phase 2)~~ done.
 3. **Shop sales (Phase 6)** — so credit from the counter lands in the same bill.
 4. **Daily milk balance and production (Phase 7)**.
 5. **Frontend MVP (Phase 11)** in parallel as soon as Phase 2 and 5 APIs are stable.

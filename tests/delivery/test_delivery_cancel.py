@@ -334,3 +334,68 @@ class CancelConcurrencyTests(Base, TransactionTestCase):
         self.assertEqual(sorted(results), ["ok", "rejected"])
         self.assertEqual(StockMovement.objects.filter(movement_type=MT.REVERSAL_IN).count(), 1)
         self.assertEqual(balance(self.milk), Decimal("100"))
+
+
+class LedgerTimestampPolicyTests(Base, TestCase):
+    """A later correction keeps the original business timestamp."""
+
+    def setUp(self):
+        from django.utils import timezone as tz
+        self.make()
+        self.day = (tz.localtime() - timedelta(days=2)).date()
+        self.original = self.deliver(
+            user=self.owner, quantity="2",
+            delivered_at=timezone.now() - timedelta(days=2),
+        )
+        # Pretend the original was also posted two days ago.
+        StockMovement.objects.filter(delivery=self.original).update(
+            created_at=timezone.now() - timedelta(days=2),
+        )
+        self.today = timezone.localdate()
+
+    def report(self, basis):
+        from apps.inventory.services import stock_net_by_date
+        return stock_net_by_date(
+            business_id=self.business.pk, product_id=self.milk.pk, basis=basis,
+            date_from=self.today - timedelta(days=10), date_to=self.today,
+        )
+
+    def correct(self):
+        return correct_delivery(
+            business_id=self.business.pk, delivery_id=self.original.pk,
+            user=self.owner, reason="Wrong litres", quantity="3",
+        )
+
+    def test_reversal_keeps_original_occurred_at_but_new_created_at(self):
+        self.correct()
+        original = StockMovement.objects.get(delivery=self.original, movement_type=MT.DELIVERY)
+        reversal = StockMovement.objects.get(delivery=self.original, movement_type=MT.REVERSAL_IN)
+        self.assertEqual(reversal.occurred_at, original.occurred_at)
+        self.assertGreater(reversal.created_at, original.created_at + timedelta(days=1))
+
+    def test_business_view_corrects_the_original_day_only(self):
+        self.correct()
+        report = self.report("business")
+        self.assertEqual(report[self.day], Decimal("-3"))
+        # Today only holds the 100 L opening adjustment: no correction noise.
+        self.assertEqual(report[self.today], Decimal("100"))
+
+    def test_posted_view_keeps_history_and_shows_correction_today(self):
+        self.correct()
+        report = self.report("posted")
+        # The day the original was posted still shows only what was posted.
+        self.assertEqual(report[self.day], Decimal("-2"))
+        # Today: 100 opening + reversal 2 - replacement 3.
+        self.assertEqual(report[self.today], Decimal("99"))
+
+    def test_both_views_agree_in_total(self):
+        self.correct()
+        self.assertEqual(sum(self.report("business").values()), sum(self.report("posted").values()))
+        self.assertEqual(sum(self.report("business").values()), balance(self.milk))
+
+    def test_cancel_alone_zeroes_the_original_business_day(self):
+        cancel_delivery(
+            business_id=self.business.pk, delivery_id=self.original.pk,
+            user=self.owner, reason="Refused",
+        )
+        self.assertEqual(self.report("business")[self.day], Decimal("0"))

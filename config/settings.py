@@ -66,6 +66,7 @@ own_apps = [
     "apps.suppliers.apps.SuppliersConfig",
     "apps.deliveries.apps.DeliveriesConfig",
     "apps.inventory.apps.InventoryConfig",
+    "apps.routes.apps.RoutesConfig",
     "apps.purchases.apps.PurchasesConfig",
 ]
 

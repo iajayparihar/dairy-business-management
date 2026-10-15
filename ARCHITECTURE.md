@@ -187,3 +187,33 @@ Django `TestCase` suites across apps (≈190 tests at last full run, all passing
 ## 12. Not built yet (architecture-level)
 
 Sales/POS module, reports/dashboards, customer billing + monthly statements, customer payments/credit ledger, production (dairy conversion) tracking, expenses/salary, notifications (SMS/WhatsApp), frontend app. Details in [ROADMAP.md](ROADMAP.md).
+
+## 13. Stock ledger timestamp policy
+
+`StockMovement` carries two timestamps with different meanings:
+
+| Field | Meaning | Who sets it |
+|---|---|---|
+| `occurred_at` | Business time: when the stock physically moved | The operation (delivery time, receipt time) |
+| `created_at` | Posting time: when the row was written | The database, never editable |
+
+Rules:
+
+1. Movements are append-only. A correction never edits or deletes a row.
+2. A reversal copies `occurred_at` from the movement it reverses. The original and its reversal cancel out on the original business date. `created_at` shows when the correction was made.
+3. A correction (cancel + replacement) therefore posts: reversal at the original `occurred_at`, new movement at the delivery's original `delivered_at`.
+4. Reports choose a basis explicitly (`inventory.services.stock_net_by_date`):
+   - `business`: grouped by `occurred_at`. Use for daily milk balance, production and closing stock (Phase 7). A past day's figure changes when it is corrected, which is the truthful figure.
+   - `posted`: grouped by `created_at`. Use for audit ("what was written on day X"). A closed day's posted total never changes later.
+5. Both bases always sum to the same total over all time.
+6. `Delivery.stock_shortfall` is a snapshot of stock at entry time, not live.
+
+## 14. Routes and daily runs (Phase 2)
+
+`apps/routes`: `Route` (usual delivery boy = a STAFF `BusinessMembership`), `RouteCustomer` (a customer is on one route, ordered), `StandingOrder` (usual basket per shift), `RouteRun` (route + date + shift, OPEN/CLOSED), `RouteVisit` (one expected stop: PENDING, DELIVERED, NOT_DELIVERED, ABSENT, SKIPPED). `Delivery.visit` links money rows to the stop.
+
+- Absent or skipped never creates a zero-value delivery; the visit records why.
+- `record_entry` is one transaction per customer: all deliveries of the entry commit or none; `client_ref` makes retries safe.
+- A run closes only when no visit is PENDING. Closed runs block cancel/correct until an owner/manager reopens with a reason.
+- Cancelling a visit's only delivery puts the visit back to PENDING.
+- Endpoints under `/api/v1/businesses/{id}/`: `routes/`, `routes/{id}/customers/`, `standing-orders/`, `route-runs/`, `route-runs/{id}/tasks|entries|close|reopen/`, `deliveries/{id}/` and `deliveries/{id}/cancel/`.
