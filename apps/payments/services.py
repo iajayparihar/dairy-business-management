@@ -154,7 +154,7 @@ def record_supplier_payment(
         )
 
 
-        outstanding = purchase.total_amount - already_allocated
+        outstanding = purchase.net_amount - already_allocated
 
         if item["amount"] > outstanding:
             raise ValidationError(
@@ -277,7 +277,7 @@ def allocate_supplier_advance(
 
 
     outstanding = (
-        purchase.total_amount - already_allocated_to_purchase
+        purchase.net_amount - already_allocated_to_purchase
     )
 
     if amount > outstanding:

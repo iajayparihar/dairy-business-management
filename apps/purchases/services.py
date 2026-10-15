@@ -141,12 +141,19 @@ def create_purchase(
     return purchase
 
 
+def _lock_purchase(purchase_id, business_id):
+    """Lock a purchase row, scoped to the business when one is given."""
+    scope = {} if business_id is None else {"business_id": business_id}
+    return SupplierPurchase.objects.select_for_update().get(
+        pk=purchase_id, **scope
+    )
+
+
 @transaction.atomic
 def update_draft_purchase(*, purchase_id, user, supplier_id=None,
-                        purchased_at=None, lines=None, notes=None):
-    purchase = SupplierPurchase.objects.select_for_update().get(
-        pk=purchase_id
-    )
+                        purchased_at=None, lines=None, notes=None,
+                        business_id=None):
+    purchase = _lock_purchase(purchase_id, business_id)
 
     _validate_membership(
         user=user,
@@ -201,10 +208,8 @@ def update_draft_purchase(*, purchase_id, user, supplier_id=None,
 
 
 @transaction.atomic
-def receive_purchase(*, purchase_id, user):
-    purchase = SupplierPurchase.objects.select_for_update().get(
-        pk=purchase_id
-    )
+def receive_purchase(*, purchase_id, user, business_id=None):
+    purchase = _lock_purchase(purchase_id, business_id)
 
     _validate_membership(
         user=user,
@@ -251,6 +256,28 @@ def receive_purchase(*, purchase_id, user):
 
     return purchase
 
+
+@transaction.atomic
+def cancel_draft_purchase(*, purchase_id, user, reason="", business_id=None):
+    """Cancel a never-received draft. No stock or payment is touched."""
+    purchase = _lock_purchase(purchase_id, business_id)
+
+    _validate_membership(user=user, business_id=purchase.business_id)
+
+    if purchase.status != SupplierPurchase.Status.DRAFT:
+        raise ValidationError("Only draft purchases can be cancelled.")
+
+    purchase.status = SupplierPurchase.Status.CANCELLED
+    purchase.cancelled_at = timezone.now()
+    purchase.cancelled_by = user
+    purchase.cancel_reason = (reason or "").strip()
+    purchase.save(
+        update_fields=[
+            "status", "cancelled_at", "cancelled_by",
+            "cancel_reason", "updated_at",
+        ]
+    )
+    return purchase
 
 
 @transaction.atomic

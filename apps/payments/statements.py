@@ -10,7 +10,7 @@ from apps.payments.models import (
     SupplierPaymentAllocation,
     SupplierPaymentReversal,
 )
-from apps.purchases.models import SupplierPurchase
+from apps.purchases.models import PurchaseAdjustment, SupplierPurchase
 
 
 ZERO = Decimal("0.00")
@@ -82,6 +82,14 @@ def get_supplier_account_statement(
         is_deleted=False,
     )
 
+    # Returns/corrections: signed payable changes, dated when posted.
+    adjustments = PurchaseAdjustment.objects.filter(
+        business_id=business_id,
+        purchase__supplier_id=supplier_id,
+        purchase__status=SupplierPurchase.Status.RECEIVED,
+        purchase__is_deleted=False,
+    )
+
     payments = SupplierPayment.objects.filter(
         business_id=business_id,
         supplier_id=supplier_id,
@@ -106,6 +114,9 @@ def get_supplier_account_statement(
 
         opening_balance = (
             _sum_amount(opening_purchases, "total_amount")
+            + _sum_amount(
+                adjustments.filter(occurred_at__date__lt=start_date)
+            )
             - _sum_amount(opening_payments)
             + _sum_amount(opening_reversals)
         )
@@ -116,6 +127,9 @@ def get_supplier_account_statement(
     period_purchases = _date_filter(
         purchases, "purchased_at", start_date, end_date
     )
+    period_adjustments = _date_filter(
+        adjustments, "occurred_at", start_date, end_date
+    ).select_related("purchase")
     period_payments = _date_filter(
         payments, "paid_at", start_date, end_date
     )
@@ -135,6 +149,18 @@ def get_supplier_account_statement(
             "amount": purchase.total_amount,
             "debit": purchase.total_amount,
             "credit": ZERO,
+        })
+
+    for adj in period_adjustments:
+        events.append({
+            "timestamp": adj.occurred_at,
+            "priority": 1,
+            "type": f"PURCHASE_{adj.adjustment_type}",
+            "reference": adj.purchase.purchase_number,
+            "description": adj.reason,
+            "amount": abs(adj.amount),
+            "debit": max(adj.amount, ZERO),
+            "credit": max(-adj.amount, ZERO),
         })
 
     for payment in period_payments:
@@ -209,6 +235,11 @@ def get_supplier_account_statement(
 
     total_purchases = _sum_amount(
         purchases_to_date, "total_amount"
+    ) + _sum_amount(
+        adjustments.filter(
+            occurred_at__date__lte=end_date,
+            purchase__purchased_at__date__lte=end_date,
+        )
     )
     total_valid_payments = _sum_amount(payments_to_date)
     total_allocated = _sum_amount(allocations_to_date)

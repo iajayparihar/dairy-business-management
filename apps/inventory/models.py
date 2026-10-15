@@ -94,7 +94,9 @@ class StockMovement(models.Model):
             ),
             models.UniqueConstraint(
                 fields=["reversal_of"],
-                condition=Q(reversal_of__isnull=False),
+                # Purchase lines may be returned in several parts; the
+                # purchase adjustment service caps the total returned.
+                condition=Q(reversal_of__isnull=False, purchase_line__isnull=True),
                 name="uniq_stock_single_reversal",
             ),
         ]

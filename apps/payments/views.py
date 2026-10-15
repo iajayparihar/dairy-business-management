@@ -143,7 +143,7 @@ class SupplierPaymentListCreateAPIView(APIView):
             )
 
             outstanding = max(
-                purchase.total_amount - paid,
+                purchase.net_amount - paid,
                 Decimal("0.00"),
             )
 

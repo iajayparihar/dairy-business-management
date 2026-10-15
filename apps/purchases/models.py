@@ -45,6 +45,15 @@ class SupplierPurchase(SoftDeleteModel):
         related_name="+",
     )
     received_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    cancel_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -88,6 +97,14 @@ class SupplierPurchase(SoftDeleteModel):
                     "supplier": "Cannot create a purchase for a deleted supplier."
                 })
                 
+    @property
+    def net_amount(self):
+        """Payable after adjustments. `total_amount` is never rewritten."""
+        adjusted = self.adjustments.aggregate(
+            total=models.Sum("amount")
+        )["total"] or Decimal("0.00")
+        return self.total_amount + adjusted
+
     def __str__(self):
         return f"{self.purchase_number} - {self.supplier.name}"
 
@@ -170,6 +187,113 @@ class PurchaseLine(SoftDeleteModel):
         return f"{self.product.name} x {self.quantity}"
 
 
+
+
+class PurchaseAdjustment(models.Model):
+    """
+    Immutable return / entry-mistake correction of a received purchase.
+
+    The original purchase and lines stay as issued. `amount` is the signed
+    change to the payable (negative = we owe less).
+    """
+
+    class Type(models.TextChoices):
+        RETURN = "RETURN", "Goods return"
+        CORRECTION = "CORRECTION", "Entry correction"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        Business, on_delete=models.PROTECT, related_name="purchase_adjustments"
+    )
+    purchase = models.ForeignKey(
+        SupplierPurchase, on_delete=models.PROTECT, related_name="adjustments"
+    )
+    adjustment_type = models.CharField(max_length=12, choices=Type.choices)
+    reason = models.TextField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    occurred_at = models.DateTimeField()
+    # Client-generated key making retried submissions safe.
+    client_ref = models.CharField(max_length=64, null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "purchases_purchase_adjustment"
+        ordering = ["occurred_at", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["business", "client_ref"],
+                condition=Q(client_ref__isnull=False),
+                name="uniq_purchase_adjustment_client_ref",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["business", "purchase"],
+                name="purchadj_biz_purchase_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Purchase adjustments are immutable.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Purchase adjustments cannot be deleted.")
+
+
+class PurchaseAdjustmentLine(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    adjustment = models.ForeignKey(
+        PurchaseAdjustment, on_delete=models.PROTECT, related_name="lines"
+    )
+    business = models.ForeignKey(
+        Business, on_delete=models.PROTECT, related_name="+"
+    )
+    purchase_line = models.ForeignKey(
+        PurchaseLine, on_delete=models.PROTECT, related_name="adjustment_lines"
+    )
+    quantity_before = models.DecimalField(max_digits=12, decimal_places=3)
+    quantity_after = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_price_before = models.DecimalField(max_digits=14, decimal_places=4)
+    unit_price_after = models.DecimalField(max_digits=14, decimal_places=4)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    stock_movement = models.ForeignKey(
+        "inventory.StockMovement",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "purchases_purchase_adjustment_line"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["adjustment", "purchase_line"],
+                name="uniq_adjustment_line_per_purchase_line",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity_after__gte=0) & Q(unit_price_after__gte=0),
+                name="purchadjline_after_nonnegative",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Purchase adjustment lines are immutable.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Purchase adjustment lines cannot be deleted.")
 
 
 class MilkCollection(SoftDeleteModel):

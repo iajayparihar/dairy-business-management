@@ -69,7 +69,9 @@ Client need: log daily milk from each village supplier with litres + fat; amount
 - ❌ Fixed-rate-per-litre mode for cow milk (client uses e.g. ₹37–40 flat; verify current calculation supports it)
 - ❌ Multiple cans per supplier per day, shift (morning/evening)
 - ❌ Daily total: litres bought, total cost, average fat
-- ❌ API for general purchases (raw material such as cream, shop goods from agencies like "Suvidha") — create, receive, cancel
+- ✅ API for general purchases under `/api/v1/businesses/<id>/purchases/` (list with filters + pagination, create draft, detail, PATCH draft, `receive/`, `cancel/`); OWNER/MANAGER only; draft cancellation audited (`cancelled_at/by`, reason), no stock or payment effect
+- ✅ Corrections to received purchases (Option D confirmed): goods returns (partial/full) and quantity/price mistake corrections via `returns/`, `corrections/`, `adjustments/`. Immutable `PurchaseAdjustment` ledger; original purchase untouched; payable = `total_amount` + adjustments (`SupplierPurchase.net_amount`); stock via `REVERSAL_OUT` / `ADJUSTMENT_IN` movements; statements show `PURCHASE_RETURN` / `PURCHASE_CORRECTION`
+- ❌ Returns/corrections for milk-collection purchases (they have no lines); refund-due tracking when a paid purchase is returned (shows as negative statement balance only)
 
 ## Phase 4 — Supplier payments and statements 🟡
 

@@ -6,7 +6,7 @@ from apps.payments.models import (
     SupplierPayment,
     SupplierPaymentAllocation,
 )
-from apps.purchases.models import SupplierPurchase
+from apps.purchases.models import PurchaseAdjustment, SupplierPurchase
 
 
 def get_supplier_balance(*, business_id, supplier_id):
@@ -18,6 +18,12 @@ def get_supplier_balance(*, business_id, supplier_id):
 
     total_purchases = (
         purchases.aggregate(total=Sum("total_amount"))["total"]
+        or Decimal("0.00")
+    ) + (
+        PurchaseAdjustment.objects.filter(
+            business_id=business_id,
+            purchase__in=purchases,
+        ).aggregate(total=Sum("amount"))["total"]
         or Decimal("0.00")
     )
 
