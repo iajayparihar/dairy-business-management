@@ -45,3 +45,4 @@ Also: when the owner pastes an external review, verify every claim against the c
 - Milk bought posts to stock via a per-business Cow/Buffalo product mapping.
 - Purchase corrections use Option D (returns and corrections through the immutable PurchaseAdjustment ledger).
 - Deliveries can never be deleted; stock timestamp policy is ARCHITECTURE.md section 13.
+- Payments: reversals may be partial and are posted only via `reverse_supplier_payment` (advance first, then allocations newest-first through `SupplierPaymentAllocationReversal` rows). `get_supplier_position` is the single place supplier money is summed; outstanding is never clamped. Run data migrations separately from schema migrations (Postgres pending-trigger-events error).

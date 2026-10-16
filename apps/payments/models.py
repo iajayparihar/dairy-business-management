@@ -92,6 +92,8 @@ class SupplierPayment(models.Model):
         default="",
     )
     notes = models.TextField(blank=True, default="")
+    # Client-generated key making retried submissions safe.
+    client_ref = models.CharField(max_length=64, null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -108,6 +110,11 @@ class SupplierPayment(models.Model):
             models.UniqueConstraint(
                 fields=["business", "payment_number"],
                 name="uniq_supplier_payment_number",
+            ),
+            models.UniqueConstraint(
+                fields=["business", "client_ref"],
+                condition=Q(client_ref__isnull=False),
+                name="uniq_supplier_payment_client_ref",
             ),
             models.CheckConstraint(
                 condition=Q(amount__gt=0),
@@ -214,8 +221,14 @@ class SupplierPaymentAllocation(models.Model):
 
 class SupplierPaymentReversal(models.Model):
     """
-    Records a full reversal of a posted supplier payment.
-    The original payment and its allocations remain unchanged.
+    One (full or partial) reversal of a posted supplier payment.
+
+    A payment can have several reversals; together they never exceed the
+    payment amount (enforced by the service under the payment row lock).
+    The original payment and its allocations are never edited: the part of
+    a reversal that had already been allocated is recorded explicitly as
+    SupplierPaymentAllocationReversal rows. The rest came out of the
+    unallocated advance.
     """
 
     id = models.UUIDField(
@@ -228,10 +241,10 @@ class SupplierPaymentReversal(models.Model):
         on_delete=models.PROTECT,
         related_name="supplier_payment_reversals",
     )
-    payment = models.OneToOneField(
+    payment = models.ForeignKey(
         SupplierPayment,
         on_delete=models.PROTECT,
-        related_name="reversal",
+        related_name="reversals",
     )
     amount = models.DecimalField(
         max_digits=14,
@@ -240,6 +253,8 @@ class SupplierPaymentReversal(models.Model):
     )
     reason = models.TextField()
     reversed_at = models.DateTimeField()
+    # Client-generated key making retried submissions safe.
+    client_ref = models.CharField(max_length=64, null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -258,6 +273,11 @@ class SupplierPaymentReversal(models.Model):
             models.CheckConstraint(
                 condition=Q(amount__gt=0),
                 name="supplier_payment_reversal_positive",
+            ),
+            models.UniqueConstraint(
+                fields=["business", "client_ref"],
+                condition=Q(client_ref__isnull=False),
+                name="uniq_supplier_reversal_client_ref",
             ),
         ]
         indexes = [
@@ -279,3 +299,68 @@ class SupplierPaymentReversal(models.Model):
 
     def __str__(self):
         return f"Reversal of {self.payment.payment_number}"
+
+
+class SupplierPaymentAllocationReversal(models.Model):
+    """
+    The part of an allocation taken back by a payment reversal.
+
+    Effective allocation = allocation.amount - sum(these rows). The
+    allocation row itself stays untouched.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name="supplier_allocation_reversals",
+    )
+    reversal = models.ForeignKey(
+        SupplierPaymentReversal,
+        on_delete=models.PROTECT,
+        related_name="unwinds",
+    )
+    allocation = models.ForeignKey(
+        SupplierPaymentAllocation,
+        on_delete=models.PROTECT,
+        related_name="unwinds",
+    )
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableLedgerManager()
+
+    class Meta:
+        db_table = "payments_supplier_allocation_reversal"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reversal", "allocation"],
+                name="uniq_alloc_reversal_per_reversal",
+            ),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0),
+                name="supplier_alloc_reversal_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["business", "allocation"],
+                name="supp_allocrev_biz_alloc_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Allocation reversals are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Allocation reversals cannot be deleted.")

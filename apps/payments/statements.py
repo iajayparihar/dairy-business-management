@@ -1,15 +1,14 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.db.models import Q, Sum
+from django.db.models import Sum
 from django.utils import timezone
 
-from apps.payments.models import (
-    SupplierPayment,
-    SupplierPaymentAllocation,
-    SupplierPaymentReversal,
-)
+from apps.businesses.models import Business
+from apps.payments.models import SupplierPayment, SupplierPaymentReversal
+from apps.payments.selectors import get_supplier_position
 from apps.purchases.models import PurchaseAdjustment, SupplierPurchase
 
 
@@ -20,16 +19,18 @@ def _sum_amount(queryset, field="amount"):
     return queryset.aggregate(total=Sum(field))["total"] or ZERO
 
 
-def _date_filter(queryset, field, start_date=None, end_date=None):
-    if start_date is not None:
-        queryset = queryset.filter(
-            **{f"{field}__date__gte": start_date}
-        )
+def _day_start(tz, day):
+    """Start of a calendar day in the business timezone."""
+    return datetime.combine(day, time.min, tzinfo=tz)
 
-    if end_date is not None:
-        queryset = queryset.filter(
-            **{f"{field}__date__lte": end_date}
-        )
+
+def _range_filter(queryset, field, start, end):
+    """Half-open [start, end) on business time; either bound may be None."""
+    if start is not None:
+        queryset = queryset.filter(**{f"{field}__gte": start})
+
+    if end is not None:
+        queryset = queryset.filter(**{f"{field}__lt": end})
 
     return queryset
 
@@ -72,8 +73,12 @@ def get_supplier_account_statement(
             {"end_date": "End date must be on or after start date."}
         )
 
-    # Default to today for a statement's closing date.
-    end_date = end_date or timezone.localdate()
+    # Day boundaries are in the business timezone, as half-open ranges
+    # [start_date 00:00, end_date + 1 day 00:00).
+    tz = ZoneInfo(Business.objects.get(pk=business_id).timezone)
+    end_date = end_date or timezone.now().astimezone(tz).date()
+    start_at = _day_start(tz, start_date) if start_date else None
+    end_at = _day_start(tz, end_date + timedelta(days=1))
 
     purchases = SupplierPurchase.objects.filter(
         business_id=business_id,
@@ -102,40 +107,28 @@ def get_supplier_account_statement(
 
     # Opening balance includes all activity before the start date.
     if start_date:
-        opening_purchases = purchases.filter(
-            purchased_at__date__lt=start_date
-        )
-        opening_payments = payments.filter(
-            paid_at__date__lt=start_date
-        )
-        opening_reversals = reversals.filter(
-            reversed_at__date__lt=start_date
-        )
-
         opening_balance = (
-            _sum_amount(opening_purchases, "total_amount")
-            + _sum_amount(
-                adjustments.filter(occurred_at__date__lt=start_date)
+            _sum_amount(
+                purchases.filter(purchased_at__lt=start_at), "total_amount"
             )
-            - _sum_amount(opening_payments)
-            + _sum_amount(opening_reversals)
+            + _sum_amount(adjustments.filter(occurred_at__lt=start_at))
+            - _sum_amount(payments.filter(paid_at__lt=start_at))
+            + _sum_amount(reversals.filter(reversed_at__lt=start_at))
         )
     else:
         opening_balance = ZERO
 
     # Transactions displayed in the selected period.
-    period_purchases = _date_filter(
-        purchases, "purchased_at", start_date, end_date
+    period_purchases = _range_filter(
+        purchases, "purchased_at", start_at, end_at
     )
-    period_adjustments = _date_filter(
-        adjustments, "occurred_at", start_date, end_date
+    period_adjustments = _range_filter(
+        adjustments, "occurred_at", start_at, end_at
     ).select_related("purchase")
-    period_payments = _date_filter(
-        payments, "paid_at", start_date, end_date
-    )
-    period_reversals = _date_filter(
-        reversals, "reversed_at", start_date, end_date
-    )
+    period_payments = _range_filter(payments, "paid_at", start_at, end_at)
+    period_reversals = _range_filter(
+        reversals, "reversed_at", start_at, end_at
+    ).select_related("payment")
 
     events = []
 
@@ -204,54 +197,9 @@ def get_supplier_account_statement(
         running_balance += event["debit"] - event["credit"]
         event["balance"] = running_balance
 
-    # Calculate the supplier's position as of the statement end date.
-    purchases_to_date = purchases.filter(
-        purchased_at__date__lte=end_date
-    )
-    payments_to_date = payments.filter(
-        paid_at__date__lte=end_date
-    ).filter(
-        Q(reversal__isnull=True)
-        | Q(reversal__reversed_at__date__gt=end_date)
-    )
-
-
-    allocations_to_date = SupplierPaymentAllocation.objects.filter(
-        business_id=business_id,
-        payment__business_id=business_id,
-        payment__supplier_id=supplier_id,
-        payment__paid_at__date__lte=end_date,
-        payment__created_at__date__lte=end_date,
-        purchase__business_id=business_id,
-        purchase__supplier_id=supplier_id,
-        purchase__status=SupplierPurchase.Status.RECEIVED,
-        purchase__purchased_at__date__lte=end_date,
-        created_at__date__lte=end_date,
-    ).filter(
-        Q(payment__reversal__isnull=True)
-        | Q(payment__reversal__reversed_at__date__gt=end_date)
-    )
-
-
-    total_purchases = _sum_amount(
-        purchases_to_date, "total_amount"
-    ) + _sum_amount(
-        adjustments.filter(
-            occurred_at__date__lte=end_date,
-            purchase__purchased_at__date__lte=end_date,
-        )
-    )
-    total_valid_payments = _sum_amount(payments_to_date)
-    total_allocated = _sum_amount(allocations_to_date)
-
-    outstanding_amount = max(
-        total_purchases - total_allocated,
-        ZERO,
-    )
-
-    available_credit = max(
-        total_valid_payments - total_allocated,
-        ZERO,
+    # Same arithmetic as get_supplier_balance, as of the closing instant.
+    position = get_supplier_position(
+        business_id=business_id, supplier_id=supplier_id, as_of=end_at
     )
 
     return {
@@ -262,9 +210,5 @@ def get_supplier_account_statement(
         "opening_balance": opening_balance,
         "transactions": events,
         "closing_balance": running_balance,
-        "total_purchases": total_purchases,
-        "total_payments": total_valid_payments,
-        "allocated_payments": total_allocated,
-        "outstanding_amount": outstanding_amount,
-        "available_credit": available_credit,
+        **position,
     }

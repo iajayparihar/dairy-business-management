@@ -395,7 +395,7 @@ class SupplierPaymentTests(TestCase):
             amount="100.00",
         )
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(ValidationError):
             with transaction.atomic():
                 self.record_payment(
                     payment_number="PAY-DUP-001",

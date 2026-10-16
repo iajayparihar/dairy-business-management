@@ -18,6 +18,7 @@ from apps.suppliers.models import Supplier
 from apps.payments.services import (
     allocate_supplier_advance,
     record_supplier_payment,
+    reverse_supplier_payment,
 )
 
 class SupplierStatementRegressionTests(TestCase):
@@ -95,13 +96,13 @@ class SupplierStatementRegressionTests(TestCase):
         )
 
     def test_reversed_payment_is_excluded(self):
-        SupplierPaymentReversal.objects.create(
-            business=self.business,
-            payment=self.payment,
-            amount=self.payment.amount,
+        # Reversals go through the service: it also writes the explicit
+        # allocation-unwind rows (a bare reversal row would leave the
+        # allocation effective).
+        reverse_supplier_payment(
+            payment_id=self.payment.pk,
             reason="Regression test",
-            reversed_at=self.now,
-            created_by=self.user,
+            user=self.user,
         )
 
         statement = self.get_statement()
@@ -148,13 +149,13 @@ class SupplierStatementRegressionTests(TestCase):
         )
 
     def test_reversed_allocation_does_not_block_replacement_payment(self):
-        SupplierPaymentReversal.objects.create(
-            business=self.business,
-            payment=self.payment,
-            amount=self.payment.amount,
+        # Reversals go through the service: it also writes the explicit
+        # allocation-unwind rows (a bare reversal row would leave the
+        # allocation effective).
+        reverse_supplier_payment(
+            payment_id=self.payment.pk,
             reason="Replacement payment regression",
-            reversed_at=self.now,
-            created_by=self.user,
+            user=self.user,
         )
 
         replacement = record_supplier_payment(
@@ -180,13 +181,13 @@ class SupplierStatementRegressionTests(TestCase):
 
 
     def test_reversed_allocation_does_not_block_advance_allocation(self):
-        SupplierPaymentReversal.objects.create(
-            business=self.business,
-            payment=self.payment,
-            amount=self.payment.amount,
+        # Reversals go through the service: it also writes the explicit
+        # allocation-unwind rows (a bare reversal row would leave the
+        # allocation effective).
+        reverse_supplier_payment(
+            payment_id=self.payment.pk,
             reason="Replacement advance regression",
-            reversed_at=self.now,
-            created_by=self.user,
+            user=self.user,
         )
 
         advance = record_supplier_payment(

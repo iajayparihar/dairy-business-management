@@ -1,6 +1,13 @@
 from django.urls import path
 
-from apps.payments.views import SupplierAccountStatementAPIView, SupplierPaymentListCreateAPIView
+from apps.payments.views import (
+    SupplierAccountStatementAPIView,
+    SupplierBalanceAPIView,
+    SupplierPaymentAllocateAPIView,
+    SupplierPaymentDetailAPIView,
+    SupplierPaymentListCreateAPIView,
+    SupplierPaymentReverseAPIView,
+)
 
 app_name = "payments"
 
@@ -16,5 +23,26 @@ urlpatterns = [
         "<uuid:supplier_id>/statement/",
         SupplierAccountStatementAPIView.as_view(),
         name="supplier-account-statement",
+    ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/balance/",
+        SupplierBalanceAPIView.as_view(),
+        name="supplier-balance",
+    ),
+    path(
+        "businesses/<uuid:business_id>/payments/<uuid:payment_id>/",
+        SupplierPaymentDetailAPIView.as_view(),
+        name="supplier-payment-detail",
+    ),
+    path(
+        "businesses/<uuid:business_id>/payments/<uuid:payment_id>/reverse/",
+        SupplierPaymentReverseAPIView.as_view(),
+        name="supplier-payment-reverse",
+    ),
+    path(
+        "businesses/<uuid:business_id>/payments/<uuid:payment_id>/allocate/",
+        SupplierPaymentAllocateAPIView.as_view(),
+        name="supplier-payment-allocate",
     ),
 ]

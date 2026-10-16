@@ -18,6 +18,7 @@ from apps.payments.models import (
     SupplierPayment,
     SupplierPaymentAllocation,
 )
+from apps.payments.selectors import get_payment_amounts
 from apps.payments.services import allocate_supplier_advance
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
@@ -536,22 +537,14 @@ def create_milk_collection(
     advance_payments = SupplierPayment.objects.filter(
         business=business,
         supplier=supplier,
-        reversal__isnull=True,
     ).order_by("paid_at", "created_at")
 
     for payment in advance_payments:
         if remaining_amount <= Decimal("0.00"):
             break
 
-        already_allocated = (
-            SupplierPaymentAllocation.objects.filter(
-                payment=payment,
-                purchase__status=SupplierPurchase.Status.RECEIVED,
-            ).aggregate(total=Sum("amount"))["total"]
-            or Decimal("0.00")
-        )
-
-        available_advance = payment.amount - already_allocated
+        # Net of reversals and of allocations on live purchases.
+        available_advance = get_payment_amounts(payment)["unallocated"]
 
         if available_advance <= Decimal("0.00"):
             continue

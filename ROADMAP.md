@@ -81,8 +81,9 @@ Client need: pay every ~5 days, cash/online, track advances and what is still ow
 
 - ✅ Immutable payment ledger, allocations (incl. advances), reversals (service level)
 - ✅ Supplier balance selector and account statement
-- ✅ API: payments list / create, statement
-- ❌ API for reversing a payment and for allocating an advance
+- ✅ API: payments list / create (`client_ref` retry-safe), statement
+- ✅ Step 1: payment `client_ref` idempotency, auto-allocation in the service, tenant-scoped lookups, one shared balance function (`get_supplier_position`) for balance and statement, half-open business-timezone day ranges
+- ✅ Step 2: partial / full payment reversal (advance first, then allocations newest-first, explicit unwind rows), `payments/<id>/` detail, `reverse/`, `allocate/`, `suppliers/<id>/balance/`
 - ❌ "Pay for period" helper: compute amount due for last N days and prefill payment
 - ❌ Printable / shareable statement for the supplier
 - ❌ Payables for non-milk agencies (pending vs paid per bill)
