@@ -26,6 +26,7 @@ from apps.payments.models import (
     SupplierPaymentAllocationReversal,
 )
 from apps.purchases.api_views import raise_api_validation_error
+from apps.payments.pay_summary import get_pay_summary
 from apps.payments.selectors import get_payment_amounts, get_supplier_balance
 from apps.payments.services import (
     ClientRefConflict,
@@ -299,3 +300,34 @@ class SupplierBalanceAPIView(OwnerManagerPaymentView):
                 business_id=request.business.id, supplier_id=supplier.pk
             ),
         })
+
+
+class SupplierPaySummaryAPIView(OwnerManagerPaymentView):
+    """
+    GET ?days=N (1-366, default 5, includes today) or
+        ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD (both, inclusive).
+    days together with dates, or only one date, is a 400. Read-only: the
+    suggested_amount is advice; POST .../payments/ re-checks live data.
+    """
+
+    def get(self, request, business_id, supplier_id):
+        supplier = get_object_or_404(
+            Supplier.objects.filter(
+                business_id=request.business.id, is_deleted=False
+            ),
+            pk=supplier_id,
+        )
+        params = request.query_params
+
+        try:
+            summary = get_pay_summary(
+                business_id=request.business.id,
+                supplier_id=supplier.pk,
+                days=params.get("days"),
+                start_date=params.get("start_date"),
+                end_date=params.get("end_date"),
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+
+        return Response(summary)

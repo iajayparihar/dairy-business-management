@@ -7,6 +7,7 @@ from apps.payments.views import (
     SupplierPaymentDetailAPIView,
     SupplierPaymentListCreateAPIView,
     SupplierPaymentReverseAPIView,
+    SupplierPaySummaryAPIView,
 )
 
 app_name = "payments"
@@ -44,5 +45,11 @@ urlpatterns = [
         "businesses/<uuid:business_id>/payments/<uuid:payment_id>/allocate/",
         SupplierPaymentAllocateAPIView.as_view(),
         name="supplier-payment-allocate",
+    ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/pay-summary/",
+        SupplierPaySummaryAPIView.as_view(),
+        name="supplier-pay-summary",
     ),
 ]
