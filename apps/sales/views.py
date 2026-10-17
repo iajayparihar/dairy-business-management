@@ -68,7 +68,10 @@ def datetime_field(data, key):
     value = data.get(key)
     if value is None:
         return None
-    parsed = parse_datetime(value) if isinstance(value, str) else None
+    try:
+        parsed = parse_datetime(value) if isinstance(value, str) else None
+    except ValueError:  # well-formed but impossible, e.g. month 13
+        parsed = None
     if parsed is None:
         raise DjangoValidationError({key: "Use an ISO 8601 date and time."})
     return parsed

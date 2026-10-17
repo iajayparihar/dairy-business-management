@@ -1,4 +1,4 @@
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,6 +20,11 @@ from apps.routes.serializers import (
     StandingOrderSerializer,
     VisitSerializer,
 )
+
+
+def query_value(params, name, field):
+    """A validated query-string value (400 when malformed), else None."""
+    return field.run_validation(params[name]) if name in params else None
 
 
 class RoutesView(DeliveryViewMixin, APIView):
@@ -100,8 +105,9 @@ class StandingOrderListCreateView(RoutesView):
         qs = StandingOrder.objects.filter(
             business_id=business_id, is_active=True,
         ).select_related("customer", "product").order_by("customer__name")
-        if "customer" in request.query_params:
-            qs = qs.filter(customer_id=request.query_params["customer"])
+        customer = query_value(request.query_params, "customer", serializers.UUIDField())
+        if customer:
+            qs = qs.filter(customer_id=customer)
         paginator = StandardPagination()
         page = paginator.paginate_queryset(qs, request)
         return paginator.get_paginated_response(StandingOrderSerializer(page, many=True).data)
@@ -129,10 +135,15 @@ class RunListStartView(RoutesView):
     def get(self, request, business_id):
         membership = self.get_membership(request, business_id)
         runs = services.visible_runs(membership)
-        if "date" in request.query_params:
-            runs = runs.filter(run_date=request.query_params["date"])
-        if "status" in request.query_params:
-            runs = runs.filter(status=request.query_params["status"])
+        day = query_value(request.query_params, "date", serializers.DateField())
+        if day:
+            runs = runs.filter(run_date=day)
+        state = query_value(
+            request.query_params, "status",
+            serializers.ChoiceField(choices=RouteRun.Status.values),
+        )
+        if state:
+            runs = runs.filter(status=state)
         paginator = StandardPagination()
         page = paginator.paginate_queryset(runs, request)
         return paginator.get_paginated_response(RunSerializer(page, many=True).data)

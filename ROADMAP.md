@@ -196,6 +196,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 - Warn at delivery time when a customer owes money?
 - Production: any expected yield per product (e.g. kg dahi per 100 L) so low yield can be flagged? Is cream/skim separation recorded as its own batch? (not built; yield is only displayed)
 - Wastage: may delivery / shop staff record it, or only owner / manager? (owner / manager now)
+- Production security settings: serve over HTTPS only? (redirect, HSTS, secure cookies are not enabled yet; deployment decision)
 - Closing stock: freeze a month once closed? Cost price of produced goods (ghee, dahi) is typed by the owner as a PURCHASE price; no costing from milk. (live, not frozen, now)
 - Shop sales: split payment (part cash, part credit) on one sale? GST / discount? Printed receipt? (not built; defaults used)
 

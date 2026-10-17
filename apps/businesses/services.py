@@ -40,8 +40,10 @@ def update_membership(*, membership_id, role=None, is_active=None):
         "business_id"
     ).get(pk=membership_id)
 
-    # Serialize ownership changes for this business.
-    Business.objects.select_for_update().get(
+    # Serialize ownership changes for this business. NO KEY UPDATE still
+    # serializes this service but, unlike a plain FOR UPDATE, does not block
+    # every insert that references the business (ARCHITECTURE lock rules).
+    Business.objects.select_for_update(no_key=True).get(
         pk=membership_ref.business_id
     )
 

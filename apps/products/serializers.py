@@ -2,7 +2,7 @@
 from django.core.exceptions import ImproperlyConfigured
 from rest_framework import serializers
 
-from apps.products.models import Product, ProductCategory
+from apps.products.models import Product, ProductCategory, ProductPrice
 
 
 def get_request_business(context):
@@ -99,3 +99,26 @@ class ProductSerializer(serializers.ModelSerializer):
             business=business,
             **validated_data,
         )
+
+
+class ProductPriceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductPrice
+        fields = [
+            "id",
+            "price_type",
+            "unit_price",
+            "effective_from",
+            "effective_to",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ProductPriceCreateSerializer(serializers.Serializer):
+    price_type = serializers.ChoiceField(choices=ProductPrice.PriceType.values)
+    unit_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0
+    )
+    # Omitted means "from now". Backdating is refused by the service.
+    effective_from = serializers.DateTimeField(required=False)

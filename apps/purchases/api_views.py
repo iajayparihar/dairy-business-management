@@ -4,7 +4,6 @@ import uuid
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
-from django.utils.dateparse import parse_date
 
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, ValidationError
@@ -23,6 +22,7 @@ from apps.purchases.api_serializers import (
     MilkConfigSerializer,
 )
 from apps.purchases.milk_queries import (
+    _date_param,
     filter_milk_collections,
     milk_daily_summary,
 )
@@ -199,8 +199,10 @@ class BusinessMilkCollectionListAPIView(
 
 class MilkDailySummaryAPIView(MilkCollectionPermissionMixin, APIView):
     def get(self, request, business_id):
-        raw = request.query_params.get("date")
-        day = parse_date(raw) if raw else None
+        try:
+            day = _date_param(request.query_params, "date")
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
         if day is None:
             raise ValidationError({"date": "Required, use YYYY-MM-DD."})
 

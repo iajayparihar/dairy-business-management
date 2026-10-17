@@ -19,7 +19,10 @@ class TimezoneAwareDateTimeField(serializers.DateTimeField):
         from django.utils.dateparse import parse_datetime
 
         if isinstance(value, str):
-            parsed = parse_datetime(value)
+            try:
+                parsed = parse_datetime(value)
+            except ValueError:  # well-formed but impossible, e.g. month 13
+                parsed = None
             if parsed is None or parsed.utcoffset() is None:
                 raise serializers.ValidationError(
                     "Provide an ISO-8601 timestamp with a timezone."

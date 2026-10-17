@@ -57,7 +57,11 @@ def change_product_price(
             "The business does not exist or is inactive."
         ) from exc
 
-    # 3. Validate the effective timestamp.
+    # 3. Validate the effective timestamp. Omitted means "from now".
+    now = timezone.now()
+    if effective_from is None:
+        effective_from = now
+
     if not isinstance(effective_from, datetime):
         raise ValidationError({
             "effective_from": "A valid timestamp is required."
@@ -76,7 +80,7 @@ def change_product_price(
     )
 
     # Do not allow retroactive price changes.
-    if effective_from < timezone.now():
+    if effective_from < now:
         raise ValidationError({
             "effective_from": (
                 "Price changes cannot be backdated. "
@@ -124,12 +128,18 @@ def change_product_price(
     # for this product. All price-writing operations should use
     # this service or an equivalent locking strategy.
     
-    product = Product.objects.select_for_update().get(
-        pk=product_id,
-        business=business,
-        is_active=True,
-        is_deleted=False,
-    )
+    try:
+        product = Product.objects.select_for_update().get(
+            pk=product_id,
+            business=business,
+            is_active=True,
+            is_deleted=False,
+        )
+    except Product.DoesNotExist as exc:
+        raise ValidationError({
+            "product": "The product does not exist, is inactive, "
+                       "or belongs to another business."
+        }) from exc
 
     # 7. Load price history for this product and price type.
     price_queryset = ProductPrice.objects.filter(

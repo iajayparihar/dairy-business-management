@@ -25,7 +25,10 @@ def _date_param(params, name):
     raw = params.get(name)
     if not raw:
         return None
-    parsed = parse_date(raw)
+    try:
+        parsed = parse_date(raw)  # well-formed but impossible dates raise
+    except ValueError:
+        parsed = None
     if parsed is None:
         raise ValidationError({name: "Use YYYY-MM-DD format."})
     return parsed

@@ -1,15 +1,24 @@
 
-from rest_framework import generics
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.shortcuts import get_object_or_404
+from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
 from apps.common.querysets import scope_to_business
-from apps.products.models import Product, ProductCategory
+from apps.common.pagination import StandardPagination
+from apps.products.models import Product, ProductCategory, ProductPrice
 from apps.products.serializers import (
     ProductCategorySerializer,
+    ProductPriceCreateSerializer,
+    ProductPriceSerializer,
     ProductSerializer,
 )
+from apps.products.services import change_product_price
+from apps.purchases.api_views import raise_api_validation_error
 
 
 class BusinessScopedAPIViewMixin:
@@ -70,4 +79,62 @@ class ProductDetailAPIView(
         return scope_to_business(
             Product.objects.select_related("category"),
             self.request.business,
+        )
+
+
+class ProductPriceListCreateAPIView(BusinessScopedAPIViewMixin, APIView):
+    """
+    Price history of one product, and scheduling a new price.
+
+    Selling prices are visible to every member; PURCHASE (cost) prices are
+    cost data and visible to OWNER/MANAGER only. Only OWNER/MANAGER can
+    change a price, never into the past (`change_product_price`).
+    """
+
+    def product(self, request, pk):
+        return get_object_or_404(
+            Product.objects, pk=pk, business=request.business
+        )
+
+    def get(self, request, business_id, pk):
+        product = self.product(request, pk)
+        rows = ProductPrice.objects.filter(
+            business=request.business, product=product
+        ).order_by("-effective_from")
+        membership = request.business_membership
+        if membership is not None and membership.role not in (
+            BusinessMembership.Role.OWNER,
+            BusinessMembership.Role.MANAGER,
+        ):
+            rows = rows.filter(price_type=ProductPrice.PriceType.SELLING)
+        wanted = serializers.ChoiceField(
+            choices=ProductPrice.PriceType.values
+        )
+        if "price_type" in request.query_params:
+            rows = rows.filter(
+                price_type=wanted.run_validation(request.query_params["price_type"])
+            )
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(rows, request)
+        return paginator.get_paginated_response(
+            ProductPriceSerializer(page, many=True).data
+        )
+
+    def post(self, request, business_id, pk):
+        product = self.product(request, pk)
+        body = ProductPriceCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            price = change_product_price(
+                business_id=request.business.id,
+                product_id=product.pk,
+                user=request.user,
+                price_type=body.validated_data["price_type"],
+                unit_price=body.validated_data["unit_price"],
+                effective_from=body.validated_data.get("effective_from"),
+            )
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+        return Response(
+            ProductPriceSerializer(price).data, status=status.HTTP_201_CREATED
         )

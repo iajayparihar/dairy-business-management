@@ -67,8 +67,10 @@ def _snapshot(business, products, year, month):
 
 
 def closing_stock(*, business, year, month, compare=True):
+    # _base_manager: a soft-deleted product that still holds stock must not
+    # silently drop out of the total.
     products = list(
-        Product.objects.filter(business=business, track_stock=True).order_by("name", "sku")
+        Product._base_manager.filter(business=business, track_stock=True).order_by("name", "sku")
     )
     this = _snapshot(business, products, year, month)
     prev_ym = previous_month(year, month)
@@ -84,6 +86,7 @@ def closing_stock(*, business, year, month, compare=True):
             "product_id": str(p.pk), "sku": p.sku, "name": p.name, "unit": p.unit,
             "opening_qty": _qty(row["opening"]), "closing_qty": _qty(row["closing"]),
             "is_negative": row["closing"] < 0,
+            "product_deleted": p.is_deleted,
             "cost_rate": None if row["rate"] is None else _money(row["rate"]),
             "closing_value": None if row["value"] is None else _money(row["value"]),
         }

@@ -75,6 +75,7 @@ INSTALLED_APPS += own_apps
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "apps.common.middleware.RejectNullBytesMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -134,8 +135,11 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ],
     # Counters live in the default cache; production needs a shared CACHES backend
-    # (set REDIS_URL). Behind a reverse proxy set NUM_PROXIES, else all clients share one IP.
-    "NUM_PROXIES": env.int("NUM_PROXIES", default=0) or None,
+    # (set REDIS_URL). NUM_PROXIES = trusted proxies in front of the app. 0 (default)
+    # means no proxy: throttle by REMOTE_ADDR and ignore X-Forwarded-For. Never use
+    # None here: DRF would then trust the client-supplied header and the login /
+    # password-reset throttles could be bypassed by rotating it.
+    "NUM_PROXIES": env.int("NUM_PROXIES", default=0),
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "password_forgot": "5/hour",

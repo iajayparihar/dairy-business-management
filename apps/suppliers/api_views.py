@@ -29,14 +29,11 @@ class SupplierMilkRatePermissionMixin:
     permission_classes = [IsAuthenticated, IsBusinessMember]
 
     def get_permissions(self):
-        if self.request.method not in ("GET", "HEAD", "OPTIONS"):
-            self.required_business_roles = [
-                BusinessMembership.Role.OWNER,
-                BusinessMembership.Role.MANAGER,
-            ]
-        else:
-            self.required_business_roles = None
-
+        # Supplier rates are cost data: OWNER/MANAGER only, reads included.
+        self.required_business_roles = [
+            BusinessMembership.Role.OWNER,
+            BusinessMembership.Role.MANAGER,
+        ]
         return super().get_permissions()
 
     def get_supplier(self):

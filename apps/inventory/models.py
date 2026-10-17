@@ -13,7 +13,22 @@ from apps.payments.models import ImmutableLedgerQuerySet
 from apps.products.models import Product
 
 
+class StockMovementQuerySet(models.QuerySet):
+    """The ledger is append-only; queryset writes would bypass save()/delete()."""
+
+    def update(self, **kwargs):
+        raise ValueError("Stock movements are immutable. Create a reversal instead.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValueError("Stock movements are immutable. Create a reversal instead.")
+
+    def delete(self):
+        raise ValueError("Stock movements cannot be deleted. Create a reversal instead.")
+
+
 class StockMovement(models.Model):
+    objects = models.Manager.from_queryset(StockMovementQuerySet)()
+
     class MovementType(models.TextChoices):
         PURCHASE_RECEIPT = "PURCHASE_RECEIPT", "Purchase receipt"
         DELIVERY = "DELIVERY", "Customer delivery"

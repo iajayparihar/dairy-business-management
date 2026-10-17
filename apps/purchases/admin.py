@@ -1,11 +1,14 @@
 
 from django.contrib import admin
 
+from apps.common.admin_mixins import ReadOnlyAdmin
 from apps.purchases.models import SupplierPurchase, MilkCollection
 
 
 @admin.register(SupplierPurchase)
-class SupplierPurchaseAdmin(admin.ModelAdmin):
+class SupplierPurchaseAdmin(ReadOnlyAdmin):
+    """Money ledger header: view only; changes go through the services."""
+
     list_display = (
         "purchase_number",
         "business",
@@ -21,16 +24,6 @@ class SupplierPurchaseAdmin(admin.ModelAdmin):
         "supplier__name",
         "business__name",
     )
-    readonly_fields = (
-        "created_by",
-        "created_at",
-        "updated_at",
-    )
-
-    def save_model(self, request, obj, form, change):
-        if not change:
-            obj.created_by = request.user
-        super().save_model(request, obj, form, change)
 
 
 @admin.register(MilkCollection)
