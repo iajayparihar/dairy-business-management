@@ -67,9 +67,28 @@ def stock_balance(*, business_id, product_id):
     return stock_in - stock_out
 
 
-def stock_net_by_date(*, business_id, product_id, basis, date_from, date_to):
+def stock_balances(*, business_id):
+    """{product_id: balance} for every product with ledger rows, one query."""
+    rows = (
+        StockMovement.objects.filter(business_id=business_id)
+        .values("product_id")
+        .annotate(
+            stock_in=Sum("quantity", filter=Q(movement_type__in=STOCK_IN_TYPES)),
+            stock_out=Sum("quantity", filter=Q(movement_type__in=STOCK_OUT_TYPES)),
+        )
+    )
+    return {
+        r["product_id"]: (r["stock_in"] or Decimal("0")) - (r["stock_out"] or Decimal("0"))
+        for r in rows
+    }
+
+
+def stock_net_by_date(
+    *, business_id, product_id, basis, date_from, date_to, tz=None
+):
     """
-    Net stock change per Asia/Kolkata date, from the append-only ledger.
+    Net stock change per local date (`tz`, default the current Django
+    timezone; pass the Business timezone), from the append-only ledger.
 
     basis="business": group by occurred_at, the date the stock really
         moved. Corrections net out on the original date. Use for daily
@@ -88,7 +107,7 @@ def stock_net_by_date(*, business_id, product_id, basis, date_from, date_to):
             business_id=business_id,
             product_id=product_id,
         )
-        .annotate(day=TruncDate(field, tzinfo=timezone.get_current_timezone()))
+        .annotate(day=TruncDate(field, tzinfo=tz or timezone.get_current_timezone()))
         .filter(day__gte=date_from, day__lte=date_to)
         .values("day")
         .annotate(
