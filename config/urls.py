@@ -34,4 +34,5 @@ urlpatterns = [
         include("apps.routes.urls"),
     ),
     path("api/v1/", include("apps.purchases.urls")),
+    path("api/v1/", include("apps.billing.urls")),
 ]

@@ -54,6 +54,7 @@ apps/
   suppliers/           suppliers + per-milk-type fat rates
   purchases/           purchases (draft→received), purchase lines, milk collections
   payments/            supplier payments, allocations, reversals, statements
+  billing/             customer bills, customer payments, allocations, balance, statement, bill PDF
   inventory/           stock movement ledger
   sales/               (empty stub)
   reports/             (empty stub)
@@ -145,7 +146,7 @@ Design choices on the ledger tables: payments and stock movements are **append-o
 | Suppliers | `businesses/{b}/suppliers/` · `suppliers/{id}/` · `suppliers/{s}/milk-rates/` |
 | Milk purchase | `businesses/{b}/suppliers/{s}/milk-collections/` · `.../{id}/` · `.../{id}/cancel/` · `.../{id}/correct/` |
 | Milk (business-wide) | `businesses/{b}/milk-collections/` · `.../daily-summary/?date=` · `businesses/{b}/milk-config/` |
-| Payments | `businesses/{b}/suppliers/{s}/payments/` · `suppliers/{s}/statement/` |
+| Payments | `businesses/{b}/suppliers/{s}/payments/` · `suppliers/{s}/statement/` · `.../statement/print/` · `.../pay-summary/` · `.../balance/` · `businesses/{b}/payments/{id}/` · `.../reverse/` · `.../allocate/` |
 | Auth | see §5 |
 
 Not yet exposed over the API (models/services exist): purchases CRUD + receive, stock balance, payment reversal/allocation.
@@ -161,7 +162,7 @@ Not yet exposed over the API (models/services exist): purchases CRUD + receive, 
 1. Same auth/tenant checks.
 2. `create_milk_collection` (atomic, business row locked): resolves shift and label, replays an identical `client_ref`, resolves the supplier's rate for that milk type and time, computes the amount (see §15), creates the linked purchase and the collection, posts a `PURCHASE_RECEIPT` stock movement when a product is mapped, then auto-applies supplier advances.
 
-**Supplier statement** — `GET .../suppliers/{s}/statement/?start=&end=`
+**Supplier statement** — `GET .../suppliers/{s}/statement/?start_date=&end_date=&page=&page_size=`
 `get_supplier_account_statement` sums purchases vs. payments/allocations in the period and returns opening balance, entries, closing balance (positive = we owe supplier, negative = advance).
 
 ## 9. Configuration
@@ -244,3 +245,20 @@ Rules:
 - **Migrations**: `0004` schema, `0005` backfill (one unwind row per allocation of every pre-existing reversal, full amount; no existing row touched). Reversing 0004 back to a one-to-one reversal fails if a payment has several reversals.
 - **Rule for code**: post reversals only through `reverse_supplier_payment`. A bare `SupplierPaymentReversal` row does not unwind allocations.
 - **Pay for period** (`GET suppliers/<sid>/pay-summary/`, OWNER/MANAGER): `?days=N` (1-366, default 5, includes today) or both `start_date`/`end_date`; mixing them, one date alone, a bad format or an inverted range is a 400. Period days are half-open in `Business.timezone`. `suggested_amount = max(outstanding - available_credit, 0)` (everything owed, older dues included, less advance already held); a negative outstanding is shown as `refund_due`. `breakdown` splits `period_outstanding` from `outstanding_outside_period`; they always sum to `outstanding_amount`. Read-only and lock-free: `POST payments/` re-checks live data, and an overpayment just becomes advance.
+- **Statement API** (OWNER/MANAGER only, as are the payments list, print and pay-summary): `transactions` is one page (default 50, max 200) of the period, each row's running `balance` computed over the whole period, so the last row of the last page equals `closing_balance`; totals are period-wide; `pagination` = `{count, page, page_size, num_pages}`. Also returns `business_name`, `currency`, `timezone`, `supplier_code`, `supplier_name`, `generated_at`. `statement/print/` returns escaped, business-local HTML (all rows, default last 30 days, max 366, `Cache-Control: no-store`); the frontend fetches it with the bearer token and prints it. The payments list is paginated with `StandardPagination`.
+
+## 17. Customer billing and payments (Phase 5)
+
+`apps/billing`. The receivable is a **FINALIZED `CustomerBill`**; deliveries are only its source. Positive balance = the customer owes, negative = advance.
+
+- **Models**: `CustomerBill` (DRAFT / FINALIZED / VOID; type PERIOD or OPENING; explicit `period_start`/`period_end`; `total_amount`, `balance_before` and `header_snapshot` fixed at finalize; `replaces` links a replacement), `CustomerBillLine` (one immutable row per delivery, amount = the delivery's stored `line_total`, milk kind snapshotted from `BusinessMilkConfig`), `CustomerPayment`, `CustomerPaymentAllocation`, `CustomerPaymentReversal`, `CustomerPaymentAllocationReversal` (same shape as the supplier tables).
+- **One arithmetic**: `selectors.get_customer_position(as_of)`. `net_balance = total_billed - total_payments = outstanding_amount - available_credit`. Allocations on VOID bills are ignored (money returns to credit). `as_of` is void-aware, so an old statement reads the same after a later void. `unbilled_*` (deliveries with no line on a FINALIZED bill) is reported beside the balance, never in it.
+- **Lifecycle**: a DRAFT stores no lines (live from deliveries, so never stale). `finalize` needs the period to have ended (`period_end` < business-local today), accepts `expected_total` (409 if the live total differs), copies the lines, snapshots `balance_before`, and applies held advance to the new bill. `void` needs a reason (>= 3 chars), is allowed even when paid, and by default issues a replacement DRAFT. Numbers are server-generated and never reused: bill `<CODE>-<YYMMDD of start>-<seq>` (opening `<CODE>-OB-<YYMMDD>-<seq>`), payment `PAY-<CODE>-<YYMMDD>-<seq>`.
+- **Period lock**: a FINALIZED bill closes that customer's period. `create_delivery`, `cancel_delivery` and `correct_delivery` refuse a delivery dated inside it (`billing.guards.assert_period_open`, day read in `Business.timezone`) until the bill is voided. `Delivery.delivery_date` follows the server timezone, so bills filter `delivered_at` with half-open business-local bounds instead. DB guard: exclusion constraint, finalized periods of one customer never overlap.
+- **Lock order**: route run -> customer (`FOR NO KEY UPDATE`) -> bill -> delivery -> payment -> product. Every writer of a customer's deliveries, bills or payments takes the customer lock first (`billing.locks.lock_customer`). Forced-interleaving tests: `tests/billing/test_concurrency.py`.
+- **Payments**: `allocations` omitted = oldest bill first, `[]` = keep all as advance, list = exactly those; `paid_at` optional (default now, not future); replay compares the normalized request and ignores a defaulted time. Reversal takes advance first, then newest allocations, as explicit unwind rows. `payment_number` cannot be sent.
+- **Opening balance**: owed amount = a FINALIZED OPENING bill (one live per customer; identical retry = 200, different = 409; void to re-enter); prepaid = advance payment (method OTHER).
+- **API** (`/api/v1/businesses/<id>/`, OWNER/MANAGER only, unknown fields rejected, money as strings): `customers/<c>/payments/` (GET list, POST), `customers/<c>/balance/`, `customers/<c>/statement/`, `customers/<c>/bills/` (POST draft), `customers/<c>/opening-balance/`, `customer-payments/<p>/` (+ `reverse/`, `allocate/`), `bills/` (list: customer, status, bill_type, start_date, end_date, unpaid), `bills/generate/` (bulk drafts, `skipped` with reasons), `bills/<b>/` (+ `finalize/`, `void/`, `pdf/`). `customer-payments/` is separate because `payments/<id>/` is supplier payments.
+- **Also changed**: customers with deliveries, bills or payments cannot be deleted (deactivate instead); `DeliveryAdmin` is read-only; `audit_bills` reports broken invariants (bill vs deliveries, allocations, balance reconciliation).
+- **Known limits**: PDF is English with "Rs."; `correct_delivery` still fails for an inactive customer (reactivate first); no discounts or write-offs.
+- **Migration**: `billing/0001_initial` only (schema, no backfill, no other table touched); rehearsed forward, reverse, forward on a copy of the dev DB.

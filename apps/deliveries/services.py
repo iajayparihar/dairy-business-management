@@ -6,6 +6,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
+from apps.billing.guards import assert_period_open
 from apps.businesses.models import Business, BusinessMembership
 from apps.businesses.services import require_business_membership
 from apps.customers.models import Customer
@@ -90,7 +91,9 @@ def create_delivery(
         }) from exc
 
     try:
-        customer = Customer.objects.get(
+        # Lock order: customer -> product. The customer lock keeps a bill
+        # from being finalized between the billed-period check and the insert.
+        customer = Customer.objects.select_for_update(no_key=True).get(
             pk=customer_id,
             business=business,
             is_active=True,
@@ -150,6 +153,8 @@ def create_delivery(
                     )
                 })
             return replay
+
+    assert_period_open(business, customer.pk, delivered_at)
 
     now = timezone.now()
 
@@ -358,23 +363,29 @@ def _lock_delivery(business_id, delivery_id):
     Lock a delivery for cancellation/correction; raises Delivery.DoesNotExist.
 
     Global lock order, used by every writer so none can deadlock:
-        route run -> delivery -> product
+        route run -> customer -> delivery -> product
     The run lock is what makes "run is CLOSED" a stable fact: close_run,
     reopen_run, record_entry and this function all take it first, so a
     delivery can never be changed in a run that closes underneath it.
-    This is also the single place a future "delivery is on a locked bill"
-    rule belongs (check it here, after the locks).
+    A delivery inside a finalized bill's period is refused here too
+    (apps/billing/guards.assert_period_open), after the locks.
     """
     from apps.routes.models import RouteRun
 
-    # A delivery's visit never changes, so peeking without a lock is safe.
-    visit_id = Delivery.objects.filter(
+    # A delivery's visit and customer never change, so peeking without a lock
+    # is safe.
+    visit_id, customer_id = Delivery.objects.filter(
         pk=delivery_id, business_id=business_id,
-    ).values_list("visit_id", flat=True).get()
+    ).values_list("visit_id", "customer_id").get()
 
     run = None
     if visit_id:
         run = RouteRun.objects.select_for_update().get(visits__pk=visit_id)
+
+    # The customer lock (also taken by create_delivery and by bill finalize)
+    # makes "this period is billed" a stable fact. _base_manager: a deleted
+    # or inactive customer's deliveries can still be cancelled.
+    Customer._base_manager.select_for_update(no_key=True).get(pk=customer_id)
 
     delivery = Delivery.objects.select_for_update().get(
         pk=delivery_id, business_id=business_id,
@@ -385,6 +396,12 @@ def _lock_delivery(business_id, delivery_id):
             "This delivery belongs to a closed route run. "
             "Reopen the run to correct it."
         )
+
+    assert_period_open(
+        Business.objects.only("timezone").get(pk=business_id),
+        customer_id,
+        delivery.delivered_at,
+    )
 
     # Same lock create_delivery takes, so the stock reversal cannot
     # interleave with a concurrent shortfall calculation.

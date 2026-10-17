@@ -10,6 +10,7 @@ from apps.businesses.models import Business
 from apps.payments.models import SupplierPayment, SupplierPaymentReversal
 from apps.payments.selectors import get_supplier_position
 from apps.purchases.models import PurchaseAdjustment, SupplierPurchase
+from apps.suppliers.models import Supplier
 
 
 ZERO = Decimal("0.00")
@@ -75,7 +76,9 @@ def get_supplier_account_statement(
 
     # Day boundaries are in the business timezone, as half-open ranges
     # [start_date 00:00, end_date + 1 day 00:00).
-    tz = ZoneInfo(Business.objects.get(pk=business_id).timezone)
+    business = Business.objects.get(pk=business_id)
+    supplier = Supplier.objects.get(pk=supplier_id, business_id=business_id)
+    tz = ZoneInfo(business.timezone)
     end_date = end_date or timezone.now().astimezone(tz).date()
     start_at = _day_start(tz, start_date) if start_date else None
     end_at = _day_start(tz, end_date + timedelta(days=1))
@@ -204,7 +207,13 @@ def get_supplier_account_statement(
 
     return {
         "business_id": str(business_id),
+        "business_name": business.name,
+        "currency": business.currency,
+        "timezone": business.timezone,
         "supplier_id": str(supplier_id),
+        "supplier_code": supplier.supplier_code,
+        "supplier_name": supplier.name,
+        "generated_at": timezone.now(),
         "start_date": start_date,
         "end_date": end_date,
         "opening_balance": opening_balance,

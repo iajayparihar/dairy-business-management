@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.payments.views import (
     SupplierAccountStatementAPIView,
+    SupplierAccountStatementPrintAPIView,
     SupplierBalanceAPIView,
     SupplierPaymentAllocateAPIView,
     SupplierPaymentDetailAPIView,
@@ -51,5 +52,11 @@ urlpatterns = [
         "<uuid:supplier_id>/pay-summary/",
         SupplierPaySummaryAPIView.as_view(),
         name="supplier-pay-summary",
+    ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/statement/print/",
+        SupplierAccountStatementPrintAPIView.as_view(),
+        name="supplier-account-statement-print",
     ),
 ]

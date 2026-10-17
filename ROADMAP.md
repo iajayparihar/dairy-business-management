@@ -12,8 +12,8 @@ Legend: ✅ done · 🟡 partial · ❌ not started
 | 1 | Catalog: products, prices, customers | ✅ |
 | 2 | Door-to-door deliveries | ✅ |
 | 3 | Milk purchase from suppliers | ✅ |
-| 4 | Supplier payments and statements | 🟡 |
-| 5 | Customer billing, payments, credit | ❌ |
+| 4 | Supplier payments and statements | ✅ |
+| 5 | Customer billing, payments, credit | ✅ |
 | 6 | Shop counter sales | ❌ |
 | 7 | Production and stock reconciliation | 🟡 |
 | 8 | Expenses and salary | ❌ |
@@ -75,7 +75,7 @@ Client need: log daily milk from each village supplier with litres + fat; amount
 - ❌ Physical goods return of milk and refund-due tracking when a paid purchase is returned (shows as negative statement balance only)
 - ❌ Fat-based cow milk (not needed now; add `pricing_basis` handling when the client asks)
 
-## Phase 4 — Supplier payments and statements 🟡
+## Phase 4 — Supplier payments and statements ✅
 
 Client need: pay every ~5 days, cash/online, track advances and what is still owed.
 
@@ -85,19 +85,24 @@ Client need: pay every ~5 days, cash/online, track advances and what is still ow
 - ✅ Step 1: payment `client_ref` idempotency, auto-allocation in the service, tenant-scoped lookups, one shared balance function (`get_supplier_position`) for balance and statement, half-open business-timezone day ranges
 - ✅ Step 2: partial / full payment reversal (advance first, then allocations newest-first, explicit unwind rows), `payments/<id>/` detail, `reverse/`, `allocate/`, `suppliers/<id>/balance/`
 - ✅ Step 3: "pay for period" helper `GET suppliers/<id>/pay-summary/?days=N` (read-only): total outstanding less held advance, with the period's purchases and payments split out
-- ❌ Printable / shareable statement for the supplier
-- ❌ Payables for non-milk agencies (pending vs paid per bill)
+- ✅ Step 4: statement API paginated (`page`, `page_size`; running balance spans the whole period), identity fields (business, supplier, currency, timezone, generated_at), print-friendly HTML `statement/print/` (escaped, business-local times, last 30 days by default, max 366); payments list paginated; statement, print and payments list are now OWNER/MANAGER only
+- ⏭ Deferred (not Phase 4): server-side PDF / WhatsApp sharing; payables for non-milk agencies (pending / partial / paid per bill). The existing `SupplierPurchase` + payments already carry non-milk bills; only per-bill status and an agency view are missing. See open questions.
 
-## Phase 5 — Customer billing, payments and credit ❌
+## Phase 5 — Customer billing, payments and credit ✅
 
-Biggest remaining pain: month-end bills take 3–4 days by hand.
+Biggest remaining pain: month-end bills took 3–4 days by hand. Design and rules: ARCHITECTURE.md §17.
 
-- ❌ Customer payment ledger (cash / UPI / online, advance, partial) mirroring supplier payments
-- ❌ Customer balance: outstanding (udhaar) or advance
-- ❌ Monthly bill generation: per-customer summary (cow litres, buffalo litres, extras, rates, total, paid, due)
-- ❌ Bill PDF (hard copy) for the ~5% without WhatsApp
-- ❌ Bill lock / finalize so a sent bill cannot silently change
-- ❌ Handling "paid in advance, bill not yet seen" cases (client example: ₹1000 paid against ₹900 bill)
+- ✅ Customer payments (cash / UPI / bank / cheque / other), partial, advance, payment before the bill exists; immutable; reversal (full or partial); `client_ref` retry-safe; server-generated numbers
+- ✅ Customer balance: outstanding or advance, plus delivered-but-unbilled reported beside it; paginated account statement
+- ✅ Bills: explicit period per bill, live DRAFT, FINALIZE (frozen lines, previous-balance snapshot), VOID with reason and replacement draft
+- ✅ A finalized bill closes its period to delivery create / cancel / correct until voided
+- ✅ Paying more than the bill (client example: ₹1000 against ₹900) leaves an advance that is applied to the next bill
+- ✅ Opening balances (owed = OPENING bill, prepaid = advance payment)
+- ✅ Bill PDF (reportlab, English, "Rs."), deterministic from the stored snapshot
+- ✅ `audit_bills` read-only consistency command
+- ❌ Hindi bill PDF (needs a Devanagari font and text shaping)
+- ❌ Discounts, round-off, write-off of small balances (no rule from the client yet)
+- ❌ Delivery boy recording cash collected at the door (OWNER/MANAGER only for now)
 
 ## Phase 6 — Shop counter sales ❌
 
@@ -181,6 +186,15 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 
 ## Open questions for the client
 
+- Can the delivery boy record cash collected at the door, or only the owner / manager?
+- Discounts, round-off, or forgiving small balances: any rule?
+- Any required bill / receipt number format (e.g. a printed receipt book)?
+- Should the printed bill list each day's quantity, or only totals per product and rate?
+- Hindi bill (needs a font)?
+- Warn at delivery time when a customer owes money?
+
+- Supplier statements: is the print-friendly view enough, or is a real PDF / WhatsApp share needed?
+- Non-milk agencies: goods suppliers only, or also service / expense bills (transport, repairs)?
 - Is cow milk always a flat per-litre rate, or sometimes fat-based too?
 - SMS or WhatsApp for bills and reminders (cost and sender setup)?
 - One shared tablet at the shop plus delivery boy's phone, or personal phones?

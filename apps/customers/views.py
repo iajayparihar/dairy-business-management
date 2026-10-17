@@ -1,7 +1,9 @@
 
 from rest_framework import generics
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
+from apps.billing.guards import customer_has_records
 from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
 from apps.common.querysets import scope_to_business
@@ -49,3 +51,13 @@ class CustomerDetailAPIView(
             Customer.objects.all(),
             self.request.business,
         )
+
+    def perform_destroy(self, instance):
+        if customer_has_records(instance):
+            raise ValidationError({
+                "detail": (
+                    "This customer has deliveries, bills or payments and "
+                    "cannot be deleted. Mark the customer inactive instead."
+                )
+            })
+        instance.delete()

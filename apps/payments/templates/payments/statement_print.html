@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statement {{ s.supplier_code }} {{ s.start_date|date:"Y-m-d" }} to {{ s.end_date|date:"Y-m-d" }}</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; color: #111; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .meta { color: #444; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #f2f2f2; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tfoot td, .opening td { font-weight: 600; }
+  .summary { margin-top: 16px; max-width: 420px; }
+  .summary td { border: 0; padding: 2px 8px; }
+  .note { color: #555; font-size: 12px; margin-top: 12px; }
+  @media print { body { margin: 0; } thead { display: table-header-group; } tr { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+<h1>{{ s.business_name }}</h1>
+<div class="meta">
+  Supplier statement: <strong>{{ s.supplier_name }}</strong> ({{ s.supplier_code }})<br>
+  Period: {{ s.start_date|date:"d M Y" }} to {{ s.end_date|date:"d M Y" }} &middot; Currency: {{ s.currency }} &middot; Times in {{ s.timezone }}<br>
+  Generated: {{ generated_local|date:"d M Y, H:i" }}
+</div>
+<table>
+  <thead>
+    <tr><th>Date</th><th>Type</th><th>Reference</th><th>Description</th>
+        <th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr>
+  </thead>
+  <tbody>
+    <tr class="opening"><td colspan="6">Opening balance</td><td class="num">{{ s.opening_balance }}</td></tr>
+    {% for t in rows %}
+    <tr>
+      <td>{{ t.local_time|date:"d M Y H:i" }}</td>
+      <td>{{ t.type }}</td>
+      <td>{{ t.reference }}</td>
+      <td>{{ t.description }}</td>
+      <td class="num">{% if t.debit %}{{ t.debit }}{% endif %}</td>
+      <td class="num">{% if t.credit %}{{ t.credit }}{% endif %}</td>
+      <td class="num">{{ t.balance }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No transactions in this period.</td></tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><td colspan="6">Closing balance</td><td class="num">{{ s.closing_balance }}</td></tr>
+  </tfoot>
+</table>
+<table class="summary">
+  <tr><td>Outstanding (owed to supplier)</td><td class="num">{{ s.outstanding_amount }}</td></tr>
+  <tr><td>Advance held with supplier</td><td class="num">{{ s.available_credit }}</td></tr>
+</table>
+<p class="note">Positive balance: we owe the supplier. Negative: the supplier holds an advance. Outstanding and advance are as of the end of the period.</p>
+</body>
+</html>

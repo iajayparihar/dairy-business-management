@@ -1,4 +1,10 @@
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
+
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
@@ -8,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.businesses.permissions import IsBusinessMember
+from apps.common.pagination import StandardPagination
 from apps.suppliers.models import Supplier
 from apps.payments.statements import get_supplier_account_statement
 
@@ -35,39 +42,117 @@ from apps.payments.services import (
     reverse_supplier_payment,
 )
 
-class SupplierAccountStatementAPIView(APIView):
+class OwnerManagerMixin:
+    """Money data (purchases, payments, statements): OWNER/MANAGER only."""
+
     permission_classes = [IsAuthenticated, IsBusinessMember]
+
+    def get_permissions(self):
+        self.required_business_roles = [
+            BusinessMembership.Role.OWNER,
+            BusinessMembership.Role.MANAGER,
+        ]
+        return super().get_permissions()
+
+
+def _build_statement(request, supplier_id, start_date=None, end_date=None):
+    supplier = get_object_or_404(
+        Supplier.objects.filter(
+            business_id=request.business.id, is_deleted=False
+        ),
+        pk=supplier_id,
+    )
+    try:
+        return get_supplier_account_statement(
+            business_id=request.business.id,
+            supplier_id=supplier.id,
+            start_date=start_date or request.query_params.get("start_date"),
+            end_date=end_date or request.query_params.get("end_date"),
+        )
+    except DjangoValidationError as exc:
+        raise_api_validation_error(exc)
+
+
+class SupplierAccountStatementAPIView(OwnerManagerMixin, APIView):
+    """
+    GET ?start_date=&end_date=&page=&page_size= (default 50, max 200).
+    `transactions` holds only the requested page; every row's running
+    `balance` is computed over the whole period, so pages line up and the
+    last row of the last page equals `closing_balance`. Totals are for the
+    whole period. `pagination` = {count, page, page_size, num_pages}.
+    """
 
     def get(self, request, business_id, supplier_id):
-        supplier = get_object_or_404(
-            Supplier.objects.filter(
-                business_id=business_id,
-                is_deleted=False,
-            ),
-            pk=supplier_id,
-        )
+        statement = _build_statement(request, supplier_id)
 
-        start_date = request.query_params.get("start_date")
-        end_date = request.query_params.get("end_date")
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(
+            statement["transactions"], request
+        )
+        statement["transactions"] = page
+        statement["pagination"] = {
+            "count": paginator.page.paginator.count,
+            "page": paginator.page.number,
+            "page_size": paginator.get_page_size(request),
+            "num_pages": paginator.page.paginator.num_pages,
+        }
+        return Response(statement, status=status.HTTP_200_OK)
+
+
+class SupplierAccountStatementPrintAPIView(OwnerManagerMixin, APIView):
+    """
+    GET ?start_date=&end_date= -> print-friendly HTML (all rows, no
+    pagination). Defaults to the last 30 days; at most 366 days. It is an
+    authenticated API call: the frontend fetches it with the bearer token
+    and shows/prints the result (the browser cannot send the header itself).
+    """
+
+    MAX_DAYS = 366
+    DEFAULT_DAYS = 30
+
+    def get(self, request, business_id, supplier_id):
+        params = request.query_params
+        tz = ZoneInfo(request.business.timezone)
+        today = timezone.now().astimezone(tz).date()
 
         try:
-            statement = get_supplier_account_statement(
-                business_id=business_id,
-                supplier_id=supplier.id,
-                start_date=start_date,
-                end_date=end_date,
+            end = date.fromisoformat(params.get("end_date") or today.isoformat())
+            start = date.fromisoformat(
+                params.get("start_date")
+                or (end - timedelta(days=self.DEFAULT_DAYS - 1)).isoformat()
             )
-        except DjangoValidationError as exc:
-            detail = getattr(exc, "message_dict", None)
-            if detail is None:
-                detail = exc.messages
-            raise ValidationError(detail)
+        except ValueError:
+            raise ValidationError({"detail": "Use YYYY-MM-DD dates."})
 
-        return Response(statement, status=status.HTTP_200_OK)
-    
+        if start > end:
+            raise ValidationError(
+                {"end_date": "End date must be on or after start date."}
+            )
+        if (end - start).days + 1 > self.MAX_DAYS:
+            raise ValidationError(
+                f"The period can be at most {self.MAX_DAYS} days."
+            )
 
-class SupplierPaymentListCreateAPIView(APIView):
-    permission_classes = [IsAuthenticated, IsBusinessMember]
+        statement = _build_statement(request, supplier_id, start, end)
+
+        rows = [
+            {**t, "local_time": t["timestamp"].astimezone(tz)}
+            for t in statement["transactions"]
+        ]
+        html = render_to_string(
+            "payments/statement_print.html",
+            {
+                "s": statement,
+                "rows": rows,
+                "generated_local": statement["generated_at"].astimezone(tz),
+            },
+        )
+        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class SupplierPaymentListCreateAPIView(OwnerManagerMixin, APIView):
 
     def get(self, request, business_id, supplier_id):
         supplier = get_object_or_404(
@@ -83,23 +168,14 @@ class SupplierPaymentListCreateAPIView(APIView):
             supplier=supplier,
         ).order_by("-paid_at", "-created_at")
 
-        return Response(
-            SupplierPaymentReadSerializer(payments, many=True).data
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(payments, request)
+        return paginator.get_paginated_response(
+            SupplierPaymentReadSerializer(page, many=True).data
         )
 
     @transaction.atomic
     def post(self, request, business_id, supplier_id):
-        membership = request.business_membership
-
-        if membership.role not in (
-            BusinessMembership.Role.OWNER,
-            BusinessMembership.Role.MANAGER,
-        ):
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied(
-                "Only owners and managers can record supplier payments."
-            )
-
         supplier = get_object_or_404(
             Supplier.objects.filter(
                 business_id=request.business.id,
@@ -148,17 +224,7 @@ class SupplierPaymentListCreateAPIView(APIView):
 
 
 
-class OwnerManagerPaymentView(APIView):
-    """Payment detail/actions expose money data: OWNER/MANAGER only."""
-
-    permission_classes = [IsAuthenticated, IsBusinessMember]
-
-    def get_permissions(self):
-        self.required_business_roles = [
-            BusinessMembership.Role.OWNER,
-            BusinessMembership.Role.MANAGER,
-        ]
-        return super().get_permissions()
+class OwnerManagerPaymentView(OwnerManagerMixin, APIView):
 
     def get_payment(self, request, payment_id):
         # Tenant-scoped: another business's payment is simply a 404.
