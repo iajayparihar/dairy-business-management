@@ -362,7 +362,8 @@ class FinalizeTests(BillFlow, TestCase):
             business=self.business, product=self.cow, price_type="SELLING",
             unit_price=D("99.00"), effective_from=ist(2026, 9, 20),
         )
-        self.deliver(self.cow, "1", ist(2026, 9, 25))  # a new delivery in the period
+        with self.assertRaises(ValidationError):  # the period is closed
+            self.deliver(self.cow, "1", ist(2026, 9, 25))
 
         bill.refresh_from_db()
         self.assertEqual(bill.total_amount, D("1240.00"))

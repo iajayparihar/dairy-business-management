@@ -190,8 +190,10 @@ class BillImmutabilityTests(BillingBase, TestCase):
 class BillLineTests(DbRejects, BillingBase, TestCase):
     def setUp(self):
         self.build()
-        self.bill = self.make_bill(status="FINALIZED", total="120")
+        # deliver first: a finalized bill closes its period to new deliveries
         self.delivery = self.deliver(self.cow, "2", ist(2026, 9, 5))
+        self.later_delivery = self.deliver(self.cow, "1", ist(2026, 9, 6))
+        self.bill =self.make_bill(status="FINALIZED", total="120")
 
     def line(self, **overrides):
         fields = dict(
@@ -212,7 +214,7 @@ class BillLineTests(DbRejects, BillingBase, TestCase):
         return CustomerBillLine(**fields)
 
     def test_lines_are_inserted_in_bulk_and_listed_in_time_order(self):
-        later = self.deliver(self.cow, "1", ist(2026, 9, 6))
+        later = self.later_delivery
         CustomerBillLine.objects.bulk_create([
             self.line(delivery=later, delivered_at=later.delivered_at),
             self.line(),
