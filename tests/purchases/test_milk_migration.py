@@ -22,8 +22,10 @@ class MilkBackfillMigrationTest(TransactionTestCase):
         return MigrationExecutor(connection).loader.project_state(targets).apps
 
     def tearDown(self):
-        # Leave the test database fully migrated for the next test.
-        self.migrate(self.after)
+        # Leave the test database fully migrated (all latest migrations, not
+        # just `after`) so later tests see every column.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
 
     def test_old_rows_are_backfilled_without_touching_money(self):
         old = self.migrate(self.before)
