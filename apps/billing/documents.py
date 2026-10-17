@@ -38,6 +38,7 @@ def _stored_rows(bill):
     return [
         {
             "delivery_id": line.delivery_id,
+            "sale_line_id": line.sale_line_id,
             "product_id": line.product_id,
             "line_kind": line.line_kind,
             "description": line.description,
@@ -136,6 +137,7 @@ def bill_document(bill):
         "lines": [
             {
                 "delivered_at": r["delivered_at"], "shift": r["shift"],
+                "source": "SHOP" if r["sale_line_id"] else "DELIVERY",
                 "kind": r["line_kind"], "product": r["description"],
                 "unit": r["unit"], "quantity": quantity(r["quantity"]),
                 "rate": money(r["unit_price"]), "amount": money(r["amount"]),

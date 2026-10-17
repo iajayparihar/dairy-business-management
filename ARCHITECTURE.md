@@ -262,3 +262,16 @@ Rules:
 - **Also changed**: customers with deliveries, bills or payments cannot be deleted (deactivate instead); `DeliveryAdmin` is read-only; `audit_bills` reports broken invariants (bill vs deliveries, allocations, balance reconciliation).
 - **Known limits**: PDF is English with "Rs."; `correct_delivery` still fails for an inactive customer (reactivate first); no discounts or write-offs.
 - **Migration**: `billing/0001_initial` only (schema, no backfill, no other table touched); rehearsed forward, reverse, forward on a copy of the dev DB.
+
+## 18. Shop counter sales (Phase 6)
+
+`apps/sales`. A `Sale` (CASH / ONLINE / CREDIT, COMPLETED / CANCELLED) has `SaleLine`s: a product line (price from the price list at `sold_at`, or typed for open-price products) or an "other item" (description + amount, no product, no stock). Rows are never edited or deleted; cancel needs a reason, correct = cancel + replacement at the original `sold_at` (`replaces`).
+
+- **Ledger rule**: only CREDIT sales are billed. `CustomerBillLine` has exactly one source (DB check): `delivery` or `sale_line` (`product` is null for an other item, `shift` blank). Billing selects COMPLETED credit sales by `sold_at` with the same half-open business-local bounds as deliveries. CASH / ONLINE sales (even with a customer) never touch bills, payments or balance. Unbilled credit sales are reported beside the balance (`unbilled_sales`, included in `unbilled_amount`), never in it. A voided bill makes its sales unbilled again and the replacement draft picks them up.
+- **Period freeze**: a CREDIT sale (create / cancel / correct) inside a FINALIZED period is refused via `assert_period_open`; cash / online are not frozen.
+- **Stock**: `track_stock` products post a `SALE` movement at `occurred_at = sold_at`; shortfall = quantity beyond balance, stored on the line, never blocks. Cancel posts `REVERSAL_IN` at the original time. Responses carry `stock_shortfall` and `stock_posted` per line.
+- **Numbers**: `SHOP-<YYMMDD in Business.timezone>-<seq>` (server-only, unique per business, never reused); `client_ref` required, unique per business; same ref + different data = 409.
+- **Lock order**: business (`no_key`, number allocation and `client_ref` serialization) -> customer (`no_key`) -> sale -> products sorted by id (a correction locks old and new products together). Billing never takes the business lock, so no inversion. Tests: `tests/sales/test_concurrency.py`.
+- **Roles**: any member sells, lists, adds a quick customer; STAFF may backdate 48 h (same as deliveries); cancel / correct OWNER/MANAGER. The customer of a sale cannot change in a correction (a customer-less sale may be given one).
+- **API** (`/api/v1/businesses/<id>/sales/`, unknown fields rejected, money as strings): `` (GET list: start_date, end_date, payment_mode, status, customer_id, has_shortfall; POST), `<id>/`, `<id>/cancel/`, `<id>/correct/`, `summary/?date=`, `quick-customer/`.
+- **Migrations**: `sales/0001`, `inventory/0007` (SALE type, `sale_line` FK), `billing/0002-0004` (nullable `delivery` / `product`, `sale_line`, one-source check); schema only, no backfill; rehearsed forward / back / forward on a copy of the dev DB.

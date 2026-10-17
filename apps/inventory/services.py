@@ -19,6 +19,7 @@ STOCK_IN_TYPES = [
 
 STOCK_OUT_TYPES = [
     StockMovement.MovementType.DELIVERY,
+    StockMovement.MovementType.SALE,
     StockMovement.MovementType.WASTAGE,
     StockMovement.MovementType.ADJUSTMENT_OUT,
     StockMovement.MovementType.REVERSAL_OUT,

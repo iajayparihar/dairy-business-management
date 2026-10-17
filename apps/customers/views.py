@@ -1,4 +1,5 @@
 
+from django.db.models import Q
 from rest_framework import generics
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -33,10 +34,18 @@ class CustomerListCreateAPIView(
     serializer_class = CustomerSerializer
 
     def get_queryset(self):
-        return scope_to_business(
+        customers = scope_to_business(
             Customer.objects.all(),
             self.request.business,
         )
+        term = self.request.query_params.get("search", "").strip()
+        if term:
+            # ponytail: counter lookup, capped at 20 matches, no paging.
+            customers = customers.filter(
+                Q(name__icontains=term) | Q(phone__icontains=term)
+                | Q(customer_code__icontains=term)
+            )[:20]
+        return customers
 
 
 class CustomerDetailAPIView(
@@ -56,7 +65,7 @@ class CustomerDetailAPIView(
         if customer_has_records(instance):
             raise ValidationError({
                 "detail": (
-                    "This customer has deliveries, bills or payments and "
+                    "This customer has deliveries, sales, bills or payments and "
                     "cannot be deleted. Mark the customer inactive instead."
                 )
             })

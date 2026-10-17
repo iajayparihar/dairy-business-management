@@ -30,6 +30,7 @@ from apps.customers.models import Customer
 from apps.deliveries.models import Delivery
 from apps.inventory.models import BusinessMilkConfig
 from apps.purchases.milk_queries import local_day_bounds
+from apps.sales.models import Sale, SaleLine
 
 ALLOWED_ROLES = ["OWNER", "MANAGER"]
 MAX_PERIOD_DAYS = 366
@@ -100,6 +101,23 @@ def billable_deliveries(business, customer_id, period_start, period_end):
     )
 
 
+def billable_sale_lines(business, customer_id, period_start, period_end):
+    """
+    Lines of the customer's COMPLETED credit sales in the period, by sold_at
+    in Business.timezone (same half-open bounds as deliveries). Cash and
+    online sales are never billed.
+    """
+    start_at, end_at = period_bounds(business, period_start, period_end)
+    return SaleLine.objects.filter(
+        sale__business_id=business.pk,
+        sale__customer_id=customer_id,
+        sale__payment_mode=Sale.PaymentMode.CREDIT,
+        sale__status=Sale.Status.COMPLETED,
+        sale__sold_at__gte=start_at,
+        sale__sold_at__lt=end_at,
+    )
+
+
 def _milk_kinds(business_id):
     """Product id -> milk kind from the milk mapping, plus any warnings."""
     config = BusinessMilkConfig.objects.filter(business_id=business_id).first()
@@ -128,8 +146,8 @@ def _milk_kinds(business_id):
 def build_bill_lines(business, customer_id, period_start, period_end):
     """
     The lines a bill for this customer and period would carry, as dicts:
-    one per delivery, in delivery order. amount is the delivery's stored
-    line_total (never recomputed). Returns (rows, warnings).
+    one per delivery or shop credit-sale line, in time order. amount is the
+    source's stored line_total (never recomputed). Returns (rows, warnings).
     """
     kinds, warnings = _milk_kinds(business.pk)
     deliveries = (
@@ -140,6 +158,7 @@ def build_bill_lines(business, customer_id, period_start, period_end):
     rows = [
         {
             "delivery_id": delivery.pk,
+            "sale_line_id": None,
             "product_id": delivery.product_id,
             "line_kind": kinds.get(delivery.product_id, Kind.OTHER),
             "description": delivery.product.name,
@@ -152,6 +171,28 @@ def build_bill_lines(business, customer_id, period_start, period_end):
         }
         for delivery in deliveries
     ]
+    sale_lines = (
+        billable_sale_lines(business, customer_id, period_start, period_end)
+        .select_related("sale")
+    )
+    rows += [
+        {
+            "delivery_id": None,
+            "sale_line_id": line.pk,
+            "product_id": line.product_id,
+            # A shop sale of the mapped milk product is still milk.
+            "line_kind": kinds.get(line.product_id, Kind.OTHER),
+            "description": line.description,
+            "unit": line.unit,
+            "delivered_at": line.sale.sold_at,
+            "shift": "",
+            "quantity": line.quantity,
+            "unit_price": line.unit_price,
+            "amount": line.line_total,
+        }
+        for line in sale_lines
+    ]
+    rows.sort(key=lambda r: (r["delivered_at"], str(r["delivery_id"] or r["sale_line_id"])))
     return rows, warnings
 
 
@@ -275,11 +316,17 @@ def generate_draft_bill(
             "detail": _overlap_message(clash), "bill_id": str(clash.pk),
         })
 
-    if not billable_deliveries(
-        business, customer.pk, period_start, period_end
-    ).exists():
+    if not (
+        billable_deliveries(
+            business, customer.pk, period_start, period_end
+        ).exists()
+        or billable_sale_lines(
+            business, customer.pk, period_start, period_end
+        ).exists()
+    ):
         raise NothingToBill(
-            "Nothing to bill: the customer has no deliveries in this period."
+            "Nothing to bill: the customer has no deliveries or shop credit "
+            "sales in this period."
         )
 
     bill = CustomerBill.objects.create(
@@ -357,9 +404,9 @@ def generate_drafts(
 
 
 def billable_deliveries_in_business(business, period_start, period_end):
-    """Ids of the customers that have billable deliveries in the period."""
+    """Ids of the customers with billable deliveries or credit sales."""
     start_at, end_at = period_bounds(business, period_start, period_end)
-    return (
+    delivered = (
         Delivery.objects.filter(
             business_id=business.pk,
             status=Delivery.Status.DELIVERED,
@@ -367,8 +414,18 @@ def billable_deliveries_in_business(business, period_start, period_end):
             delivered_at__lt=end_at,
         )
         .values_list("customer_id", flat=True)
-        .distinct()
     )
+    sold = (
+        Sale.objects.filter(
+            business_id=business.pk,
+            payment_mode=Sale.PaymentMode.CREDIT,
+            status=Sale.Status.COMPLETED,
+            sold_at__gte=start_at,
+            sold_at__lt=end_at,
+        )
+        .values_list("customer_id", flat=True)
+    )
+    return delivered.union(sold)
 
 
 def _header_snapshot(business, customer):

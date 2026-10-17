@@ -104,16 +104,18 @@ Biggest remaining pain: month-end bills took 3–4 days by hand. Design and rule
 - ❌ Discounts, round-off, write-off of small balances (no rule from the client yet)
 - ❌ Delivery boy recording cash collected at the door (OWNER/MANAGER only for now)
 
-## Phase 6 — Shop counter sales ❌
+## Phase 6 — Shop counter sales ✅
 
 Client need: walk-in and credit sales from the shop, one-tap entry on a tablet.
 
-- ❌ Sale model: customer (optional), items, payment mode (cash / online / credit)
-- ❌ Dairy products priced from product price list (paneer 250 g at ₹400/kg etc.)
-- ❌ "Other items" quick entry with free amount (no per-item tracking, by client's choice)
-- ❌ Quick customer search by name; add new customer inline
-- ❌ Credit sales feed the customer ledger from Phase 5
-- ❌ Include shop purchases in the same monthly bill as milk deliveries
+- ✅ Sale model: customer (optional), items, payment mode (cash / online / credit)
+- ✅ Dairy products priced from the product price list at `sold_at` (open-price products take a typed price)
+- ✅ "Other items" quick entry with free description + amount (no stock, no per-item tracking)
+- ✅ Quick customer search (`customers/?search=`, name / phone / code, max 20) and inline add (`sales/quick-customer/`, code `CUST-<n>`)
+- ✅ Credit sales reach the customer ledger through the monthly bill (cash / online never do)
+- ✅ Shop credit sales are lines on the same monthly bill as milk deliveries
+- ✅ Stock: tracked products post a `SALE` movement; shortfall is flagged on the line, never blocks
+- ✅ Cancel / correct (OWNER/MANAGER, reason required), daily summary per payment mode
 
 ## Phase 7 — Production and stock reconciliation 🟡
 
@@ -179,7 +181,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 
 1. **Customer ledger + monthly billing (Phase 5)** — removes the 3–4 day manual task, the client's top problem.
 2. ~~Delivery entry (Phase 2)~~ done.
-3. **Shop sales (Phase 6)** — so credit from the counter lands in the same bill.
+3. ~~Shop sales (Phase 6)~~ done.
 4. **Daily milk balance and production (Phase 7)**.
 5. **Frontend MVP (Phase 11)** in parallel as soon as Phase 2 and 5 APIs are stable.
 6. **Notifications (Phase 10)**, then expenses/salary (8) and dashboard (9).
@@ -192,6 +194,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 - Should the printed bill list each day's quantity, or only totals per product and rate?
 - Hindi bill (needs a font)?
 - Warn at delivery time when a customer owes money?
+- Shop sales: split payment (part cash, part credit) on one sale? GST / discount? Printed receipt? (not built; defaults used)
 
 - Supplier statements: is the print-friendly view enough, or is a real PDF / WhatsApp share needed?
 - Non-milk agencies: goods suppliers only, or also service / expense bills (transport, repairs)?

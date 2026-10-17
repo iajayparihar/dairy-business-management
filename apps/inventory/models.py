@@ -16,6 +16,7 @@ class StockMovement(models.Model):
     class MovementType(models.TextChoices):
         PURCHASE_RECEIPT = "PURCHASE_RECEIPT", "Purchase receipt"
         DELIVERY = "DELIVERY", "Customer delivery"
+        SALE = "SALE", "Shop sale"
         WASTAGE = "WASTAGE", "Wastage"
         ADJUSTMENT_IN = "ADJUSTMENT_IN", "Positive adjustment"
         ADJUSTMENT_OUT = "ADJUSTMENT_OUT", "Negative adjustment"
@@ -65,6 +66,13 @@ class StockMovement(models.Model):
         blank=True,
         related_name="stock_movements",
     )
+    sale_line = models.ForeignKey(
+        "sales.SaleLine",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stock_movements",
+    )
     milk_collection = models.ForeignKey(
         "purchases.MilkCollection",
         on_delete=models.PROTECT,
@@ -106,6 +114,11 @@ class StockMovement(models.Model):
                 fields=["delivery"],
                 condition=Q(movement_type="DELIVERY"),
                 name="uniq_stock_delivery_movement",
+            ),
+            models.UniqueConstraint(
+                fields=["sale_line"],
+                condition=Q(movement_type="SALE"),
+                name="uniq_stock_sale_movement",
             ),
             models.UniqueConstraint(
                 fields=["reversal_of"],

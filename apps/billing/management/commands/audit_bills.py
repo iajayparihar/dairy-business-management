@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Sum
 
 from apps.billing import selectors
-from apps.billing.bill_services import billable_deliveries
+from apps.billing.bill_services import billable_deliveries, billable_sale_lines
 from apps.billing.models import (
     CustomerBill,
     CustomerBillLine,
@@ -37,11 +37,20 @@ class Command(BaseCommand):
 
         for bill in bills:
             name = bill.bill_number
-            lines = list(CustomerBillLine.objects.filter(bill=bill).select_related("delivery"))
+            lines = list(CustomerBillLine.objects.filter(bill=bill).select_related("delivery", "sale_line__sale"))
             if sum((l.amount for l in lines), ZERO) != bill.total_amount and bill.bill_type == "PERIOD":
                 problems.append(f"{name}: total differs from the sum of its lines")
             for line in lines:
                 d = line.delivery
+                if d is None:
+                    s = line.sale_line
+                    if (s.line_total, s.quantity, s.unit_price, s.sale.customer_id) != (
+                        line.amount, line.quantity, line.unit_price, bill.customer_id,
+                    ):
+                        problems.append(f"{name}: line for sale {s.sale.sale_number} no longer matches it")
+                    if s.sale.status != "COMPLETED" or s.sale.payment_mode != "CREDIT":
+                        problems.append(f"{name}: sale {s.sale.sale_number} was cancelled after billing")
+                    continue
                 if (d.line_total, d.quantity, d.unit_price, d.customer_id) != (
                     line.amount, line.quantity, line.unit_price, bill.customer_id,
                 ):
@@ -58,6 +67,15 @@ class Command(BaseCommand):
                 billed = {l.delivery_id for l in lines}
                 if live - billed:
                     problems.append(f"{name}: {len(live - billed)} delivery(ies) in the period are not on the bill")
+                live_sales = set(
+                    billable_sale_lines(
+                        businesses[bill.business_id], bill.customer_id,
+                        bill.period_start, bill.period_end,
+                    ).values_list("pk", flat=True)
+                )
+                billed_sales = {l.sale_line_id for l in lines if l.sale_line_id}
+                if live_sales - billed_sales:
+                    problems.append(f"{name}: {len(live_sales - billed_sales)} shop sale line(s) in the period are not on the bill")
             clash = bills.filter(
                 customer_id=bill.customer_id, bill_type="PERIOD",
                 period_start__lte=bill.period_end, period_end__gte=bill.period_start,

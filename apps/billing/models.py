@@ -290,9 +290,10 @@ class CustomerBill(models.Model):
 
 class CustomerBillLine(models.Model):
     """
-    One delivery on a finalized bill, copied as it was when billed.
+    One delivery or shop-sale line on a finalized bill, copied as it was
+    when billed.
 
-    amount is the delivery's stored line_total, never quantity x unit_price
+    amount is the source's stored line_total, never quantity x unit_price
     recomputed, so rounding and old prices stay exactly as delivered.
     """
 
@@ -310,18 +311,34 @@ class CustomerBillLine(models.Model):
     bill = models.ForeignKey(
         CustomerBill, on_delete=models.PROTECT, related_name="lines",
     )
+    # Exactly one source: a milk delivery or a shop credit-sale line.
     delivery = models.ForeignKey(
-        Delivery, on_delete=models.PROTECT, related_name="bill_lines",
+        Delivery,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="bill_lines",
     )
+    sale_line = models.ForeignKey(
+        "sales.SaleLine",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="bill_lines",
+    )
+    # Null for a shop "other item" (free text, no product).
     product = models.ForeignKey(
-        Product, on_delete=models.PROTECT, related_name="+",
+        Product, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="+",
     )
     # Snapshot of the milk-config mapping at billing time.
     line_kind = models.CharField(max_length=15, choices=Kind.choices)
     description = models.CharField(max_length=200)
     unit = models.CharField(max_length=10)
+    # Delivery time, or sold_at for a shop line.
     delivered_at = models.DateTimeField()
-    shift = models.CharField(max_length=10)
+    # Blank for shop lines.
+    shift = models.CharField(max_length=10, blank=True, default="")
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     amount = models.DecimalField(max_digits=14, decimal_places=2)
@@ -333,7 +350,20 @@ class CustomerBillLine(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["bill", "delivery"],
+                condition=Q(delivery__isnull=False),
                 name="uniq_bill_line_delivery",
+            ),
+            models.UniqueConstraint(
+                fields=["bill", "sale_line"],
+                condition=Q(sale_line__isnull=False),
+                name="uniq_bill_line_sale_line",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(delivery__isnull=False, sale_line__isnull=True)
+                    | Q(delivery__isnull=True, sale_line__isnull=False)
+                ),
+                name="bill_line_one_source",
             ),
             models.CheckConstraint(
                 condition=Q(quantity__gt=0),
@@ -354,6 +384,10 @@ class CustomerBillLine(models.Model):
                 name="bline_biz_delivery_idx",
             ),
             models.Index(
+                fields=["business", "sale_line"],
+                name="bline_biz_sale_line_idx",
+            ),
+            models.Index(
                 fields=["bill", "delivered_at"],
                 name="bline_bill_time_idx",
             ),
@@ -361,7 +395,9 @@ class CustomerBillLine(models.Model):
 
     def clean(self):
         super().clean()
-        validate_same_business(self, self.bill, self.delivery, self.product)
+        validate_same_business(
+            self, self.bill, self.delivery, self.sale_line, self.product
+        )
 
     def save(self, *args, **kwargs):
         if not self._state.adding:

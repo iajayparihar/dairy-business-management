@@ -10,6 +10,7 @@ from django.core.exceptions import ValidationError
 
 from apps.billing.models import CustomerBill, CustomerPayment
 from apps.deliveries.models import Delivery
+from apps.sales.models import Sale
 
 
 def find_billed_period(business_id, customer_id, local_date):
@@ -44,10 +45,13 @@ def assert_period_open(business, customer_id, at):
 
 
 def customer_has_records(customer):
-    """True when deleting the customer would hide deliveries, bills or payments."""
+    """True when deleting the customer would hide deliveries, sales, bills or payments."""
     return (
         Delivery.objects.filter(
             customer=customer, status=Delivery.Status.DELIVERED
+        ).exists()
+        or Sale.objects.filter(
+            customer=customer, status=Sale.Status.COMPLETED
         ).exists()
         or CustomerBill.objects.filter(customer=customer).exists()
         or CustomerPayment.objects.filter(customer=customer).exists()

@@ -17,6 +17,7 @@ from apps.billing.models import (
 from apps.businesses.models import Business
 from apps.customers.models import Customer
 from apps.deliveries.models import Delivery
+from apps.sales.models import Sale
 
 ZERO = selectors.ZERO
 
@@ -44,12 +45,29 @@ def get_customer_balance(*, business_id, customer_id):
     )
     totals = unbilled.aggregate(amount=Sum("line_total"), count=Count("pk"))
 
+    # Shop credit sales not yet on a finalized bill, reported the same way.
+    unbilled_sales = Sale.objects.filter(
+        business_id=business_id,
+        customer_id=customer_id,
+        payment_mode=Sale.PaymentMode.CREDIT,
+        status=Sale.Status.COMPLETED,
+    ).exclude(
+        Exists(
+            CustomerBillLine.objects.filter(
+                sale_line__sale=OuterRef("pk"),
+                bill__status=CustomerBill.Status.FINALIZED,
+            )
+        )
+    )
+    sold = unbilled_sales.aggregate(amount=Sum("total_amount"), count=Count("pk"))
+
     return {
         **selectors.get_customer_position(
             business_id=business_id, customer_id=customer_id
         ),
-        "unbilled_amount": totals["amount"] or ZERO,
+        "unbilled_amount": (totals["amount"] or ZERO) + (sold["amount"] or ZERO),
         "unbilled_deliveries": totals["count"],
+        "unbilled_sales": sold["count"],
     }
 
 
