@@ -9,6 +9,9 @@ class InvBase(SalesBase):
     def setUp(self):
         super().setUp()
         self.c = APIClient()
+        for milk in (self.cow, self.buffalo):  # mapped in BillFlow, untracked
+            milk.track_stock = True
+            milk.save(update_fields=["track_stock"])
 
     def api(self, user=None):
         self.c.force_authenticate(user or self.staff)
@@ -19,3 +22,9 @@ class InvBase(SalesBase):
         return StockMovement.objects.create(
             business=self.business, product=product, movement_type=kind,
             quantity=D(str(qty)), **kw)
+
+    def tracked(self, sku, name, unit="KG", business=None):
+        p = self.product(sku, name, "100.00", unit=unit, business=business)
+        p.track_stock = True
+        p.save(update_fields=["track_stock"])
+        return p

@@ -14,6 +14,7 @@ from apps.products.models import Product
 STOCK_IN_TYPES = [
     StockMovement.MovementType.PURCHASE_RECEIPT,
     StockMovement.MovementType.ADJUSTMENT_IN,
+    StockMovement.MovementType.PRODUCTION_IN,
     StockMovement.MovementType.REVERSAL_IN,
 ]
 
@@ -22,6 +23,7 @@ STOCK_OUT_TYPES = [
     StockMovement.MovementType.SALE,
     StockMovement.MovementType.WASTAGE,
     StockMovement.MovementType.ADJUSTMENT_OUT,
+    StockMovement.MovementType.PRODUCTION_OUT,
     StockMovement.MovementType.REVERSAL_OUT,
 ]
 
@@ -67,11 +69,16 @@ def stock_balance(*, business_id, product_id):
     return stock_in - stock_out
 
 
-def stock_balances(*, business_id):
-    """{product_id: balance} for every product with ledger rows, one query."""
+def stock_balances(*, business_id, before=None):
+    """
+    {product_id: balance} for every product with ledger rows, one query.
+    `before` limits it to movements with occurred_at < before (business time).
+    """
+    moves = StockMovement.objects.filter(business_id=business_id)
+    if before is not None:
+        moves = moves.filter(occurred_at__lt=before)
     rows = (
-        StockMovement.objects.filter(business_id=business_id)
-        .values("product_id")
+        moves.values("product_id")
         .annotate(
             stock_in=Sum("quantity", filter=Q(movement_type__in=STOCK_IN_TYPES)),
             stock_out=Sum("quantity", filter=Q(movement_type__in=STOCK_OUT_TYPES)),

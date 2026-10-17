@@ -117,16 +117,16 @@ Client need: walk-in and credit sales from the shop, one-tap entry on a tablet.
 - ✅ Stock: tracked products post a `SALE` movement; shortfall is flagged on the line, never blocks
 - ✅ Cancel / correct (OWNER/MANAGER, reason required), daily summary per payment mode
 
-## Phase 7 — Production and stock reconciliation 🟡
+## Phase 7 — Production and stock reconciliation ✅
 
 Client need: know where each day's milk went (door-to-door, shop, dahi, ghee, ...) and how much ghee/dahi was made.
 
 - ✅ `StockMovement` ledger, stock balance, delivery and purchase-receipt postings, reversal types
-- ❌ Production batch: input (milk / cream) → output (ghee kg, dahi kg, paneer, mawa)
-- ❌ Daily milk balance: bought vs delivered vs sold vs converted vs wastage
-- ❌ Wastage and manual adjustment API
-- ❌ Month-end closing stock value; compare with previous month (client's stock-gain/loss view)
-- ❌ Stock balance API
+- ✅ Production batch: free-form inputs → outputs (`ProductionBatch`, OWNER/MANAGER, cancel / correct with reason; yield shown, never enforced)
+- ✅ Daily milk balance: bought / delivered / sold / converted / wastage per cow and buffalo (`/reports/milk-balance/`, OWNER/MANAGER; unposted litres shown)
+- ✅ Wastage and manual adjustment API (`StockAdjustment`, OWNER/MANAGER, cancel with reason, shortfall flagged)
+- ✅ Month-end closing stock value at owner-set cost price, compared with previous month (`/reports/closing-stock/`, live, OWNER/MANAGER)
+- ✅ Stock balance API (`/stock/`, any member, quantities only)
 
 ## Phase 8 — Expenses and salary ❌
 
@@ -182,7 +182,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 1. **Customer ledger + monthly billing (Phase 5)** — removes the 3–4 day manual task, the client's top problem.
 2. ~~Delivery entry (Phase 2)~~ done.
 3. ~~Shop sales (Phase 6)~~ done.
-4. **Daily milk balance and production (Phase 7)**.
+4. ~~Daily milk balance and production (Phase 7)~~ done.
 5. **Frontend MVP (Phase 11)** in parallel as soon as Phase 2 and 5 APIs are stable.
 6. **Notifications (Phase 10)**, then expenses/salary (8) and dashboard (9).
 
@@ -194,6 +194,9 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 - Should the printed bill list each day's quantity, or only totals per product and rate?
 - Hindi bill (needs a font)?
 - Warn at delivery time when a customer owes money?
+- Production: any expected yield per product (e.g. kg dahi per 100 L) so low yield can be flagged? Is cream/skim separation recorded as its own batch? (not built; yield is only displayed)
+- Wastage: may delivery / shop staff record it, or only owner / manager? (owner / manager now)
+- Closing stock: freeze a month once closed? Cost price of produced goods (ghee, dahi) is typed by the owner as a PURCHASE price; no costing from milk. (live, not frozen, now)
 - Shop sales: split payment (part cash, part credit) on one sale? GST / discount? Printed receipt? (not built; defaults used)
 
 - Supplier statements: is the print-friendly view enough, or is a real PDF / WhatsApp share needed?
