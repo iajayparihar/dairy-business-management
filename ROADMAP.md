@@ -14,10 +14,10 @@ Legend: ✅ done · 🟡 partial · ❌ not started
 | 3 | Milk purchase from suppliers | ✅ |
 | 4 | Supplier payments and statements | ✅ |
 | 5 | Customer billing, payments, credit | ✅ |
-| 6 | Shop counter sales | ❌ |
-| 7 | Production and stock reconciliation | 🟡 |
-| 8 | Expenses and salary | ❌ |
-| 9 | Dashboard and reports | ❌ |
+| 6 | Shop counter sales | ✅ |
+| 7 | Production and stock reconciliation | ✅ |
+| 8 | Expenses and salary | ✅ |
+| 9 | Dashboard and reports | ✅ |
 | 10 | Notifications and reminders | ❌ |
 | 11 | Frontend app | ❌ |
 | 12 | Production readiness | 🟡 |
@@ -136,12 +136,13 @@ Client need: know where each day's milk went (door-to-door, shop, dahi, ghee, ..
 - ✅ `expenses/summary/` (per category) and `salary_cost_by_month` for Phase 9 profit (salary counts in the month it belongs to)
 - ❌ Recurring expenses, bill photos, attendance-based deduction, employee ↔ app login link, expense ↔ supplier link (owner chose none of these for now)
 
-## Phase 9 — Dashboard and reports ❌
+## Phase 9 — Dashboard and reports ✅
 
-- ❌ Daily summary: litres bought/sold, purchase cost, sales, collections, cash vs online
-- ❌ Weekly / monthly profit view (sales − purchase − expenses)
-- ❌ Reports: supplier ledger, customer outstanding, stock, expense, product-wise sales
-- ❌ Export (CSV/PDF)
+- ✅ Daily summary: litres bought/sold, purchase cost, sales, collections (cash / online / other), supplier payments, expenses, balances at end of day (`reports/dashboard/daily/`)
+- ✅ Weekly / monthly profit estimate: simple and stock-adjusted lines, salary in month buckets for OWNER only (`reports/dashboard/profit/`)
+- ✅ Reports: supplier balances + supplier ledger, customer outstanding, stock, product-wise sales, expenses (`reports/...`, OWNER/MANAGER)
+- ✅ CSV and PDF export of every report and both dashboard views (`?export=csv|pdf`); PDF supports Hindi
+- ❌ Open: weekly view has no salary (salary is monthly; owner has not said how to spread it over weeks); `@extend_schema` docs for the new endpoints
 
 **Owner decisions (Phase 9 planning, 2026-10-18):**
 - Build Phase 8 (expenses/salary) BEFORE Phase 9 so profit includes expenses.

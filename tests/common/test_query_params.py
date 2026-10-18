@@ -15,6 +15,13 @@ class QueryParamTests(InvBase):
             f"stock/{self.paneer.pk}/?from=2026-13-45", "stock/adjustments/?to=2026-02-31",
             "stock/production/?from=2026-13-45", "reports/milk-balance/?date=2026-13-45",
             "reports/milk-balance/?from=2026-13-45&to=2026-13-46",
+            "reports/dashboard/daily/?date=2026-13-45",
+            "reports/dashboard/profit/?from=2026-13-45&to=2026-13-46",
+            "reports/supplier-balances/?as_of=2026-02-31",
+            "reports/customer-outstanding/?as_of=2026-13-45",
+            "reports/stock/?from=2026-13-45&to=2026-13-46",
+            "reports/product-sales/?from=2026-13-45&to=2026-13-46",
+            "reports/expenses/?from=2026-13-45&to=2026-13-46",
         ]
         for url in urls:
             r = c.get(f"{self.base()}/{url}")
