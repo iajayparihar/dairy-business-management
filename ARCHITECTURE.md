@@ -56,8 +56,9 @@ apps/
   payments/            supplier payments, allocations, reversals, statements
   billing/             customer bills, customer payments, allocations, balance, statement, bill PDF
   inventory/           stock movement ledger
-  sales/               (empty stub)
-  reports/             (empty stub)
+  sales/               shop counter sales
+  reports/             milk balance and closing stock reports
+  expenses/            expenses by category, employees, salary ledger
 tests/                 cross-app tests (business, customer, delivery, payment, products, purchases, supplier, users)
 ```
 
@@ -300,3 +301,16 @@ Found by fuzzing every endpoint (garbage bodies and query strings, anonymous, ST
 - **Closing stock** keeps a soft-deleted product that still holds stock (`product_deleted: true`) so the total reconciles with the ledger.
 - **Known, not changed**: `Delivery.delivery_date` is derived in the Django timezone (Asia/Kolkata), not `Business.timezone` (billing and reports use `delivered_at`, so only a non-IST business would notice); production security settings (HTTPS redirect, HSTS, secure cookies) are not env-driven yet.
 
+
+## 21. Expenses and salary (Phase 8)
+
+`apps/expenses`. Everything money-like is append-only: a row is cancelled with a reason (who, when) or corrected, never edited or deleted (`CancellableLedgerRow`: `save()` only accepts the cancel fields, bulk update / delete raise, admins are read-only).
+
+- **Expenses** (`/api/v1/businesses/<id>/expenses/`, OWNER/MANAGER): `Expense` has a category (`ExpenseCategory`, owner-created, name unique ignoring case, deactivate instead of delete), `expense_date` (a local calendar date in `Business.timezone`, past allowed, never future, months are not frozen), amount, payment method (same values as supplier / customer payments), free-text `payee`, number `EXP-<YYMMDD of expense_date>-<seq>` (server-only, never reused). `client_ref` is required: replay compares category, amount, method and texts, and the date only when it was sent. Cancel needs a reason; correct = cancel + replacement on the **original date** (`replaces`); `expense_date` and `client_ref` are rejected in a correction. `expenses/summary/?from&to` = totals per category (POSTED only, max 366 days, default last 30).
+- **Salary** (OWNER only, reads included): `Employee` (code `EMP-<n>`, `monthly_salary`, `joined_on`, `left_on`). No allocations: one running figure per employee, `balance = salary + bonus - deductions - payments` (cancelled rows excluded). Positive = owed to the employee, negative = advance. An overpayment is never blocked, it shows as an advance and is netted by the next month. Cancelling an accrual that was already paid also just shows as an advance.
+- **Accruals** (`SalaryAccrual`, kind SALARY / BONUS / DEDUCTION): the owner presses `POST salary/accruals/generate/ {month: "YYYY-MM", employee_ids?}`; it is safe to repeat (DB: one live SALARY per employee and month) and returns `created` plus `skipped` with a reason. Salary is pro-rata by calendar days when the employee joined or left inside the month (`monthly_salary * days / days_in_month`, rounded half-up; the day count and month length are stored on the row, so changing the salary later never recomputes old months). Skipped: inactive without `left_on`, not joined yet, already left, already generated. A future month is refused. BONUS / DEDUCTION are typed by the owner with a reason (`employees/<id>/adjustments/`, `client_ref` required).
+- **Payments** (`employees/<id>/payments/`, `salary-payments/<id>/`, `.../cancel/`): number `SAL-<EMPLOYEE_CODE>-<YYMMDD>-<seq>`; `paid_at` default now, never future; an inactive employee can still be paid (final settlement). Cancel only (no partial reversal).
+- **One arithmetic**: `selectors.employee_position(employee, as_of=None)`. The live figure and the event replay (`employee_events`: an accrual counts from the first day of its month, a payment from `paid_at`, every cancellation from the moment it was made) are asserted equal in tests. `employee_statement` returns opening / closing balance and every event with a running balance (unpaginated, max 366 days). `employee_balances` gives all balances in two queries for the employee list. `salary_cost_by_month` is the hook for Phase 9 (salary is a cost in the month it belongs to, not the month it was paid).
+- **Lock order**: business (`no_key`: numbers, `client_ref`, month generation) -> employee (`no_key`) -> accrual / payment; expenses: business -> expense. Cancelling an accrual or payment takes employee -> row. These are leaves of the project-wide order. Tests: `tests/expenses/test_concurrency.py`.
+- **Migrations**: `expenses/0001_initial` only (schema, no backfill, no other table touched).
+- **Not built**: recurring expenses, bill photos, attendance-based deduction, links between an employee and an app login or an expense and a supplier.

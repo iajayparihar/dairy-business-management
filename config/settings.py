@@ -70,6 +70,7 @@ own_apps = [
     "apps.routes.apps.RoutesConfig",
     "apps.purchases.apps.PurchasesConfig",
     "apps.billing.apps.BillingConfig",
+    "apps.expenses.apps.ExpensesConfig",
 ]
 
 INSTALLED_APPS += own_apps
