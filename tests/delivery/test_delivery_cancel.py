@@ -347,8 +347,10 @@ class LedgerTimestampPolicyTests(Base, TestCase):
             user=self.owner, quantity="2",
             delivered_at=timezone.now() - timedelta(days=2),
         )
-        # Pretend the original was also posted two days ago.
-        StockMovement.objects.filter(delivery=self.original).update(
+        # Pretend the original was also posted two days ago. The ledger
+        # manager refuses bulk updates, so use the plain base manager
+        # (test fixture only; this is exactly what the guard forbids in code).
+        StockMovement._base_manager.filter(delivery=self.original).update(
             created_at=timezone.now() - timedelta(days=2),
         )
         self.today = timezone.localdate()

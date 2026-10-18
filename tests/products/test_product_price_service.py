@@ -110,7 +110,9 @@ class ProductPriceServiceTests(TestCase):
         self.assertIsNone(price_b.effective_to)
 
     def test_owner_cannot_change_another_business_product_price(self):
-        with self.assertRaises(Product.DoesNotExist):
+        # A clean validation error (400 over the API), not an unhandled
+        # Product.DoesNotExist (500).
+        with self.assertRaises(ValidationError) as caught:
             change_product_price(
                 business_id=self.business_a.pk,
                 product_id=self.product_b.pk,
@@ -119,6 +121,7 @@ class ProductPriceServiceTests(TestCase):
                 effective_from=self.change_at,
                 user=self.owner_a,
             )
+        self.assertIn("product", caught.exception.message_dict)
 
     def test_backdated_price_change_is_rejected(self):
         with self.assertRaises(ValidationError):
