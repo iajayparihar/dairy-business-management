@@ -45,6 +45,18 @@ class Business(SoftDeleteModel):
         default="INR",
     )
 
+    class BillLanguage(models.TextChoices):
+        ENGLISH = "en", "English"
+        HINDI = "hi", "Hindi"
+
+    # Default language of the printed bill; `?lang=` on the PDF overrides it.
+    bill_language = models.CharField(
+        max_length=2,
+        choices=BillLanguage.choices,
+        default=BillLanguage.ENGLISH,
+        db_default=BillLanguage.ENGLISH,
+    )
+
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

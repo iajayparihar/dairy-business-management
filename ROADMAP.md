@@ -98,9 +98,9 @@ Biggest remaining pain: month-end bills took 3–4 days by hand. Design and rule
 - ✅ A finalized bill closes its period to delivery create / cancel / correct until voided
 - ✅ Paying more than the bill (client example: ₹1000 against ₹900) leaves an advance that is applied to the next bill
 - ✅ Opening balances (owed = OPENING bill, prepaid = advance payment)
-- ✅ Bill PDF (reportlab, English, "Rs."), deterministic from the stored snapshot
+- ✅ Bill PDF (reportlab), deterministic from the stored snapshot
 - ✅ `audit_bills` read-only consistency command
-- ❌ Hindi bill PDF (needs a Devanagari font and text shaping)
+- ✅ Hindi bill PDF (`?lang=hi`, "₹"; default per business `bill_language`); Hindi names print correctly on the English bill too. Hindi wording drafted by us: client to confirm
 - ❌ Discounts, round-off, write-off of small balances (no rule from the client yet)
 - ❌ Delivery boy recording cash collected at the door (OWNER/MANAGER only for now)
 
@@ -205,7 +205,7 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 - Discounts, round-off, or forgiving small balances: any rule?
 - Any required bill / receipt number format (e.g. a printed receipt book)?
 - Should the printed bill list each day's quantity, or only totals per product and rate?
-- Hindi bill (needs a font)?
+- Hindi bill wording (drafted in `apps/billing/pdf.py` LABELS): OK as is?
 - Warn at delivery time when a customer owes money?
 - Production: any expected yield per product (e.g. kg dahi per 100 L) so low yield can be flagged? Is cream/skim separation recorded as its own batch? (not built; yield is only displayed)
 - Wastage: may delivery / shop staff record it, or only owner / manager? (owner / manager now)

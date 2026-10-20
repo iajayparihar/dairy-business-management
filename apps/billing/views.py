@@ -16,7 +16,7 @@ from apps.billing.models import (
     CustomerPayment,
     CustomerPaymentAllocationReversal,
 )
-from apps.billing.pdf import render_bill_pdf
+from apps.billing.pdf import LANGUAGES as BILL_LANGUAGES, render_bill_pdf
 from apps.billing.statements import (
     get_customer_account_statement,
     get_customer_balance,
@@ -440,7 +440,13 @@ class BillPdfView(BillingView):
                 {"detail": "Only a finalized or void bill has a PDF."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        response = HttpResponse(render_bill_pdf(bill), content_type="application/pdf")
+        lang = request.query_params.get("lang") or bill.business.bill_language
+        if lang not in BILL_LANGUAGES:
+            return Response(
+                {"lang": [f"Use one of: {', '.join(BILL_LANGUAGES)}."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        response = HttpResponse(render_bill_pdf(bill, lang), content_type="application/pdf")
         response["Content-Disposition"] = f'inline; filename="{bill.bill_number}.pdf"'
         response["Cache-Control"] = "no-store"
         return response

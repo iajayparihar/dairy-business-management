@@ -28,7 +28,7 @@ from apps.reports import exports
 
 MAX_ROWS = 5000
 FONT_DIR = Path(__file__).parent / "fonts"
-DEVANAGARI = re.compile(r"[ऀ-ॿ]")
+DEVANAGARI = re.compile(r"[\u0900-\u097F\u20b9]")  # plus the rupee sign
 SCALE = 4  # image pixels per PDF point
 
 
@@ -69,8 +69,8 @@ def _runs(text):
     return out
 
 
-def shaped_image(text, size, max_width, bold=False):
-    """Hindi/mixed text as a correctly shaped image flowable (at most max_width pt)."""
+def shaped_pil(text, size, bold=False, mode="L", fill=0, background=255):
+    """Hindi/mixed text drawn by Pillow + Raqm, SCALE pixels per point."""
     px = int(size * SCALE)
     deva_path, latin_path = _paths(bold)
     fonts = {True: _font(deva_path, px), False: _font(latin_path, px)}
@@ -79,18 +79,27 @@ def shaped_image(text, size, max_width, bold=False):
     descent = max(f.getmetrics()[1] for f in fonts.values())
     width = sum(fonts[d].getlength(chunk) for chunk, d in runs)
     pad = SCALE
-    img = PILImage.new("L", (int(width) + 2 * pad, ascent + descent + 2 * pad), 255)
+    img = PILImage.new(mode, (int(width) + 2 * pad, ascent + descent + 2 * pad), background)
     draw, x = ImageDraw.Draw(img), pad
     for chunk, is_deva in runs:
-        draw.text((x, pad + ascent), chunk, font=fonts[is_deva], fill=0, anchor="ls")
+        draw.text((x, pad + ascent), chunk, font=fonts[is_deva], fill=fill, anchor="ls")
         x += fonts[is_deva].getlength(chunk)
+    return img
+
+
+def shaped_image(text, size, max_width, bold=False):
+    """Hindi/mixed text as a correctly shaped image flowable (at most max_width pt)."""
+    # Transparent background so shaded cells (header, totals) show through.
+    coverage = shaped_pil(text, size, bold, fill=255, background=0)
+    img = PILImage.new("LA", coverage.size, (0, 0))
+    img.putalpha(coverage)
     buf = BytesIO()
     img.save(buf, "PNG")
     buf.seek(0)
     w, h = img.width / SCALE, img.height / SCALE
     if w > max_width:
         h, w = h * max_width / w, max_width
-    flow = Image(buf, width=w, height=h)
+    flow = Image(buf, width=w, height=h, mask="auto")
     flow.hAlign = "LEFT"
     return flow
 

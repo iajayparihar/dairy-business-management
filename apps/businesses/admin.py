@@ -14,7 +14,7 @@ class BusinessAdmin(admin.ModelAdmin):
         "created_at",
     )
     search_fields = ("name", "slug", "phone", "email")
-    list_filter = ("is_active", "currency")
+    list_filter = ("is_active", "currency", "bill_language")
     readonly_fields = ("id", "created_at", "updated_at")
     prepopulated_fields = {"slug": ("name",)}
 

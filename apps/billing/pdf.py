@@ -1,117 +1,163 @@
 """
 Printable bill, rendered from the stored snapshot only (lines, balance_before,
 header_snapshot), never from live data, so reprinting an old bill gives the
-same document. English, amounts as "Rs." (the standard PDF fonts have no
-rupee sign); a Hindi bill needs a Devanagari font and text shaping.
+same document. Language is English ("Rs.") or Hindi ("₹"); the default is
+Business.bill_language. Any text with Devanagari or ₹ is shaped by Pillow/Raqm
+(apps.reports.pdf), since reportlab cannot shape Hindi.
 """
-from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
-from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle
 
 from apps.billing.documents import bill_document
 from apps.billing.models import CustomerBill
+from apps.businesses.models import Business
+from apps.reports.pdf import SCALE, cell, shaped_pil
+
+LANGUAGES = tuple(Business.BillLanguage.values)
+
+# ponytail: wording drafted by us; the client may correct the Hindi here.
+LABELS = {
+    "en": {
+        "money": "Rs. {}", "date": "%d %b %Y",
+        "bill": "Bill {}", "customer": "Customer: {} ({})",
+        "period": "Period: {} to {}", "opening": "Opening balance brought forward",
+        "item": "Item", "quantity": "Quantity", "rate": "Rate", "amount": "Amount",
+        "brought_forward": "Balance brought forward", "this_bill": "This bill",
+        "prev_due": "Previous outstanding", "prev_advance": "Previous advance",
+        "prev_zero": "Previous balance", "payable": "Amount payable",
+        "advance_left": "Advance remaining", "issued": "Issued {} ({})",
+        "void": "VOID: {}", "stamp": "VOID",
+    },
+    "hi": {
+        "money": "₹ {}", "date": "%d-%m-%Y",
+        "bill": "बिल {}", "customer": "ग्राहक: {} ({})",
+        "period": "अवधि: {} से {}", "opening": "पिछला बकाया आगे लाया गया",
+        "item": "सामान", "quantity": "मात्रा", "rate": "दर", "amount": "राशि",
+        "brought_forward": "आगे लाया गया बकाया", "this_bill": "इस बिल की राशि",
+        "prev_due": "पिछला बकाया", "prev_advance": "पिछला अग्रिम",
+        "prev_zero": "पिछला शेष", "payable": "कुल देय राशि",
+        "advance_left": "शेष अग्रिम", "issued": "जारी {} ({})",
+        "void": "रद्द: {}", "stamp": "रद्द / VOID",
+    },
+}
 
 
-def _rs(value):
-    return f"Rs. {Decimal(value):,.2f}"
-
-
-def _balance_line(balance):
-    balance = Decimal(balance)
-    if balance > 0:
-        return "Previous outstanding", _rs(balance)
-    if balance < 0:
-        return "Previous advance", _rs(-balance)
-    return "Previous balance", _rs(0)
-
-
-def render_bill_pdf(bill):
+def render_bill_pdf(bill, lang=None):
     """PDF bytes for a FINALIZED or VOID bill. Byte-identical on every call."""
     if bill.status == CustomerBill.Status.DRAFT:
         raise ValueError("Only a finalized or void bill has a PDF.")
+    lang = lang or bill.business.bill_language
+    if lang not in LANGUAGES:
+        raise ValueError(f"Unknown bill language {lang!r}.")
+    t = LABELS[lang]
+    rs = lambda value: t["money"].format(f"{Decimal(value):,.2f}")
+    day = lambda d: d.strftime(t["date"])
 
     doc_data = bill_document(bill)
     header = doc_data["header"]
     business, customer = header["business"], header["customer"]
     tz = ZoneInfo(business["timezone"])
-    styles = getSampleStyleSheet()
-    p = lambda text, style="Normal": Paragraph(escape(str(text)), styles[style])
     total = Decimal(doc_data["totals"]["total"])
     before = Decimal(doc_data["account"]["balance_before"])
     after = before + total
+    width = A4[0] - 2 * 20 * mm  # SimpleDocTemplate default margins
+    line = lambda text, size=10, bold=False: cell(str(text), size, width, bold=bold)
 
     story = [
-        p(business["name"], "Title"),
-        p(" | ".join(x for x in (business["address"], business["phone"]) if x)),
+        line(business["name"], 18, bold=True),
+        line(" | ".join(x for x in (business["address"], business["phone"]) if x)),
         Spacer(1, 6 * mm),
-        p(f"Bill {bill.bill_number}", "Heading2"),
-        p(f"Customer: {customer['name']} ({customer['code']})"),
+        line(t["bill"].format(bill.bill_number), 13, bold=True),
+        line(t["customer"].format(customer["name"], customer["code"])),
     ]
     if customer["address"]:
-        story.append(p(customer["address"]))
-    story.append(p(
-        "Opening balance brought forward"
-        if bill.bill_type == CustomerBill.BillType.OPENING
-        else f"Period: {bill.period_start:%d %b %Y} to {bill.period_end:%d %b %Y}"
+        story.append(line(customer["address"]))
+    story.append(line(
+        t["opening"] if bill.bill_type == CustomerBill.BillType.OPENING
+        else t["period"].format(day(bill.period_start), day(bill.period_end))
     ))
     story.append(Spacer(1, 5 * mm))
 
-    rows = [["Item", "Quantity", "Rate", "Amount"]]
-    for item in doc_data["summary"]:
-        rows.append([
-            item["product"], f"{item['quantity']} {item['unit']}",
-            _rs(item["rate"]), _rs(item["amount"]),
-        ])
-    if bill.bill_type == CustomerBill.BillType.OPENING:
-        rows.append(["Balance brought forward", "", "", _rs(total)])
-    rows.append(["This bill", "", "", _rs(total)])
+    widths = [75 * mm, 35 * mm, 30 * mm, 35 * mm]
 
-    table = Table(rows, colWidths=[75 * mm, 35 * mm, 30 * mm, 35 * mm], repeatRows=1)
+    def row(values, bold=False):
+        return [
+            cell(v, 10, widths[i] - 12, bold=bold, align="RIGHT" if i else "LEFT")
+            for i, v in enumerate(values)
+        ]
+
+    rows = [row([t["item"], t["quantity"], t["rate"], t["amount"]], bold=True)]
+    for item in doc_data["summary"]:
+        rows.append(row([
+            item["product"], f"{item['quantity']} {item['unit']}",
+            rs(item["rate"]), rs(item["amount"]),
+        ]))
+    if bill.bill_type == CustomerBill.BillType.OPENING:
+        rows.append(row([t["brought_forward"], "", "", rs(total)]))
+    rows.append(row([t["this_bill"], "", "", rs(total)], bold=True))
+
+    table = Table(rows, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story += [table, Spacer(1, 6 * mm)]
 
-    label, amount = _balance_line(before)
-    account = [[label, amount], ["This bill", _rs(total)]]
-    account.append(
-        ["Amount payable", _rs(after)] if after >= 0
-        else ["Advance remaining", _rs(-after)]
+    if before > 0:
+        first = [t["prev_due"], rs(before)]
+    elif before < 0:
+        first = [t["prev_advance"], rs(-before)]
+    else:
+        first = [t["prev_zero"], rs(0)]
+    last = [t["payable"], rs(after)] if after >= 0 else [t["advance_left"], rs(-after)]
+    box_widths = [60 * mm, 40 * mm]
+    account = [first, [t["this_bill"], rs(total)], last]
+    box = Table(
+        [
+            [cell(v, 10, box_widths[i] - 12, bold=r == 2, align="RIGHT" if i else "LEFT")
+             for i, v in enumerate(values)]
+            for r, values in enumerate(account)
+        ],
+        colWidths=box_widths, hAlign="LEFT",
     )
-    box = Table(account, colWidths=[60 * mm, 40 * mm])
     box.setStyle(TableStyle([
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LINEABOVE", (0, -1), (-1, -1), 0.5, colors.black),
     ]))
     story += [box, Spacer(1, 6 * mm)]
     if bill.finalized_at:
-        story.append(p(
-            f"Issued {bill.finalized_at.astimezone(tz):%d %b %Y, %H:%M} "
-            f"({business['timezone']})"
-        ))
+        issued = bill.finalized_at.astimezone(tz)
+        story.append(line(t["issued"].format(
+            f"{day(issued)}, {issued:%H:%M}", business["timezone"],
+        )))
     if bill.status == CustomerBill.Status.VOID:
-        story.append(p(f"VOID: {bill.void_reason}", "Heading3"))
+        story.append(line(t["void"].format(bill.void_reason), 12, bold=True))
+
+    watermark = None
+    if bill.status == CustomerBill.Status.VOID:
+        # Transparent RGBA so the stamp does not hide the bill under it.
+        watermark = shaped_pil(
+            t["stamp"], 70, bold=True, mode="RGBA",
+            fill=(204, 26, 26, 64), background=(255, 255, 255, 0),
+        )
 
     def stamp(canvas, _doc):
-        if bill.status == CustomerBill.Status.VOID:
+        if watermark is not None:
+            w, h = watermark.width / SCALE, watermark.height / SCALE
             canvas.saveState()
-            canvas.setFont("Helvetica-Bold", 90)
-            canvas.setFillColor(colors.Color(0.8, 0.1, 0.1, alpha=0.25))
             canvas.translate(A4[0] / 2, A4[1] / 2)
             canvas.rotate(35)
-            canvas.drawCentredString(0, 0, "VOID")
+            canvas.drawImage(ImageReader(watermark), -w / 2, -h / 2, w, h, mask="auto")
             canvas.restoreState()
 
     out = BytesIO()
