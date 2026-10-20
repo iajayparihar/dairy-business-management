@@ -47,7 +47,7 @@ config/                settings, root urls, wsgi/asgi
 apps/
   common/              SoftDeleteModel, tenant-aware querysets, validators
   users/               custom User, JWT login/logout, OTP password recovery
-  businesses/          Business (tenant), BusinessMembership (roles), permission class, seed command
+  businesses/          Business (tenant), BusinessMembership (roles), permission class, demo seed (seed/ + seed_demo)
   products/            categories, products, effective-dated prices
   customers/           door-to-door / shop customers
   deliveries/          daily delivery entries (customer × product × qty)
@@ -168,7 +168,7 @@ Not yet exposed over the API (models/services exist): purchases CRUD + receive, 
 
 ## 9. Configuration
 
-Environment variables (see [.env.example](.env.example)): `SECRET_KEY`, `DEBUG`, `DB_*`, `JWT_SIGNING_KEY`, `EMAIL_*`, `DEFAULT_FROM_EMAIL`, `PASSWORD_RESET_OTP_TTL_MINUTES`, `REDIS_URL`, `NUM_PROXIES`. Local setup: [Readme.md](Readme.md). Demo data: `python manage.py seed_dairy_data`.
+Environment variables (see [.env.example](.env.example)): `SECRET_KEY`, `DEBUG`, `DB_*`, `JWT_SIGNING_KEY`, `EMAIL_*`, `DEFAULT_FROM_EMAIL`, `PASSWORD_RESET_OTP_TTL_MINUTES`, `REDIS_URL`, `NUM_PROXIES`. Local setup: [Readme.md](Readme.md). Demo data: `python manage.py seed_demo` (DEBUG only; `--fresh` wipes the DB first; one module per area in `apps/businesses/seed/`).
 
 ## 10. Technical decisions (and why)
 

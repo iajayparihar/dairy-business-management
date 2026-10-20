@@ -4,13 +4,14 @@ from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.businesses.models import Business, BusinessMembership
+from apps.businesses.seed import catalog as seed_catalog
+from apps.businesses.seed import tenants as seed_tenants
 from apps.inventory.models import BusinessMilkConfig, StockMovement
 from apps.inventory.services import set_milk_config
 from apps.products.models import Product
@@ -241,12 +242,11 @@ class MilkStockTests(TestCase):
 
 
 class SeedMappingTests(TestCase):
-    def test_seed_creates_buffalo_product_and_mapping(self):
-        call_command("seed_dairy_data", verbosity=0)
-        for business in Business.objects.filter(
-            slug__in=["abhigyan-dairy", "vij-dairy"],
-        ):
-            config = business.milk_config
-            self.assertEqual(config.cow_product.sku, "MILK")
-            self.assertEqual(config.buffalo_product.sku, "MILK-BUF")
+    def test_seed_catalog_maps_cow_and_buffalo_milk(self):
+        tenants, _ = seed_tenants.seed()
+        for t in tenants.values():
+            seed_catalog.seed(t)
+            config = t.business.milk_config
+            self.assertEqual(config.cow_product.sku, "COW-MILK")
+            self.assertEqual(config.buffalo_product.sku, "BUF-MILK")
             self.assertTrue(config.buffalo_product.track_stock)

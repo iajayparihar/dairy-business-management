@@ -179,6 +179,22 @@ python manage.py migrate
 
 Only create migrations when you have made model changes that need to be recorded. Review generated migration files before committing them.
 
+### Load demo data (optional, development only)
+
+One command loads a realistic multi-tenant dataset (3 dairies, owners / managers / staff,
+~2 months of milk collections, route deliveries, shop sales, production, bills, payments,
+expenses and salary) through the real service layer:
+
+```bash
+python manage.py seed_demo           # empty database
+python manage.py seed_demo --fresh   # WIPES the whole database first, then seeds
+```
+
+It runs only with `DEBUG=True` and takes about 3 minutes. Every login uses the password
+`Dairy@12345`; usernames read `<name>_<role>_<business>` (e.g. `ajay_owner_abhigyan`,
+`suresh_manager_abhigyan`, `raju_staff_abhigyan`) and the full list is printed at the end.
+Each area has its own module in `apps/businesses/seed/`.
+
 ## 8. Create a Django administrator (optional)
 
 To access the Django admin site, create a superuser:
@@ -240,6 +256,24 @@ ls -la .venv
 
 If it does not exist, create it again using Section 2.
 
+```bash
+sudo -u postgres psql
+CREATE USER dairy_user WITH PASSWORD 'YOUR_STRONG_PASSWORD';
+
+CREATE DATABASE dairy_db OWNER dairy_user;
+
+GRANT ALL PRIVILEGES ON DATABASE dairy_db TO dairy_user;
+
+\c dairy_db
+
+GRANT ALL ON SCHEMA public TO dairy_user;
+
+ALTER SCHEMA public OWNER TO dairy_user;
+
+ALTER USER dairy_user CREATEDB;
+\q
+```
+
 ## 11. Quick setup checklist
 
 - [ ] Python and PostgreSQL are installed.
@@ -255,9 +289,6 @@ If it does not exist, create it again using Section 2.
 ---
 
 **Development note:** Use separate credentials and environment configuration for development, testing, and production. Back up important data before making database or migration changes.
-
-
-___
 
 # Test Cmd
 ## run all of the tests
