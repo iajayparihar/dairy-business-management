@@ -37,7 +37,7 @@ Related documents:
    - [Roles and access](#roles-and-access)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Quick setup checklist](#11-quick-setup-checklist)
-12. [Tests](#test-cmd), [password recovery](#password-recovery-otp), [management commands](#management-commands)
+12. [Tests](#test-cmd), [authentication and password recovery](#authentication), [management commands](#management-commands)
 
 ## 1. Prerequisites
 
@@ -477,8 +477,6 @@ python manage.py test --parallel 4                  # whole suite on 4 processes
 
 The suite creates and destroys its own `test_<DB_NAME>` database, so your data is not touched, but the database user needs the `CREATEDB` privilege (see Section 4). The full suite has about 940 tests and takes roughly 20 minutes; run the area you changed first and the full suite before committing.
 
-## Password recovery (OTP)
-
 ## unset DB_NAME
 
 Run this if `env | grep DB_` shows a `DB_NAME` you did not intend (see [Troubleshooting](#commands-run-against-the-wrong-database)).
@@ -489,14 +487,66 @@ python manage.py seed_demo --fresh
 
 Wipes the whole database, then loads the demo data (details and logins in [Load demo data](#load-demo-data-optional-development-only)). Confirm the `Database:` line it prints first.
 
-Endpoints under `/api/v1/auth/`: `password/forgot/`, `password/reset/`, `password/change/` (login/refresh/verify/logout unchanged).
+## Authentication
+
+All auth endpoints live under `/api/v1/auth/`. The API is JWT-only (`Authorization: Bearer <access>`); sessions are used only for the admin site and the docs pages.
+
+| Endpoint | Body | Notes |
+|---|---|---|
+| `POST token/` | `username`, `password` | Returns `access` + `refresh`. Username is case-sensitive; email is not accepted. Passwords are used exactly as typed (spaces are not trimmed). Records `last_login`. Throttled 10/min. |
+| `POST token/refresh/` | `refresh` | Rotates: returns a new `access` and a new `refresh`; the old refresh token is blacklisted. |
+| `POST token/verify/` | `token` | 200 only if the token is valid, not blacklisted, not from a logged-out session or before a password change, and the user exists and is active. Accepts access or refresh tokens. |
+| `POST logout/` | `refresh` | Blacklists the refresh token **and** kills the access tokens of that login session. Send the **refresh** token, not the access token. |
+| `POST password/forgot/` | `identifier` (username or email) | Always `200` with the same message, whether or not the account exists. |
+| `POST password/reset/` | `identifier`, `otp`, `new_password` | Needs the 6-digit OTP from the email. |
+| `POST password/change/` | `old_password`, `new_password` | Needs a Bearer access token. New password must differ from the old one. |
+
+### How sessions are protected
+
+- Access tokens last 30 minutes, refresh tokens 7 days. Each login is a session with its own `sid`; every token also carries a password stamp (`pwd`).
+- **Logout** revokes that session's refresh and access tokens. Other devices stay logged in.
+- **Password change or reset** kills every access and refresh token of that user, on all devices, and sends the user a "your password was changed" email.
+- **Refresh-token theft**: if an already-rotated refresh token is used again more than 10 seconds later, all of that user's sessions are ended. A reuse within 10 seconds (double click, second tab) is just refused. Parallel refreshes with the same token succeed only once.
+- Tokens issued before the `sid` / `pwd` claims existed still work until they expire, and are not revocable by logout.
+- Token logic is in `apps/users/authentication.py` and `apps/users/views.py`; the revocation list lives in the Django cache, so production needs `REDIS_URL`.
+
+### Password recovery (OTP)
 
 - **OTP**: 6 digits, stored only as an HMAC hash, single use, TTL `PASSWORD_RESET_OTP_TTL_MINUTES` (default 10), 5 attempts, 60 s resend cooldown. Enforced in PostgreSQL (row lock on the user + partial unique index "one live OTP per user"), independent of the cache.
-- **Tokens**: reset and change revoke *all* the user's refresh tokens (all-devices logout). Already-issued **access tokens stay valid until expiry (30 min)**; immediate access-token revocation is not implemented (accepted trade-off; shorten `ACCESS_TOKEN_LIFETIME` if needed). Session logins are invalidated automatically by Django's password hash.
-- **Throttles** (per client IP / user): login 10/min, forgot 5/hour, reset 10/hour, change 10/hour. Counters live in the Django cache; the default locmem cache is per-process, so set `REDIS_URL` (and `pip install redis`) for multi-worker deployments, and `NUM_PROXIES` behind a reverse proxy. Throttling alone does not stop distributed abuse; the DB limits above are the real guard.
-- **Email**: `EMAIL_HOST/PORT/HOST_USER/HOST_PASSWORD/USE_TLS/USE_SSL/TIMEOUT`, `DEFAULT_FROM_EMAIL`. Console backend is the default only when `DEBUG=True`; otherwise SMTP. Accounts with no email must be reset by an admin (`manage.py changepassword`).
-- **Deploy**: `python manage.py migrate`, then schedule `python manage.py purge_password_otps` (daily; deletes expired/used OTPs older than 1 day; idempotent).
-- **Secrets**: copy `.env.example` to `.env`. `.env.local` was previously committed and is now untracked; it remains in Git history, so rotate `SECRET_KEY`, `JWT_SIGNING_KEY` and the DB password if they were ever used outside local dev.
+- **Email goes only to the account's own email address.** An account with no email, an inactive account, or an email shared by two accounts gets no OTP and no error: have an admin run `python manage.py changepassword <username>`.
+- **Sending is asynchronous** (`EMAIL_ASYNC`, default on; inline in tests) so the response time never reveals whether an account exists. A failed send is logged and the unusable OTP is deleted, so the user can ask again straight away. If the server restarts mid-send the email is lost and the user asks again; move to a task queue (Celery) if you need delivery guarantees.
+- **A failed send still returns 200.** If no OTP arrives, read the server log (`Email 'Your password reset code' failed`).
+- **Throttles** (per client IP / user): login 10/min, forgot 5/hour, reset 10/hour, change 10/hour. Counters live in the Django cache.
+- Weak passwords are refused with 400 (length, common, numeric-only, similar to the username) and the OTP stays usable.
+
+### Email setup (Gmail SMTP)
+
+```dotenv
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_HOST_USER=you@gmail.com
+EMAIL_HOST_PASSWORD=<16-character Google app password>
+EMAIL_USE_TLS=True
+DEFAULT_FROM_EMAIL=you@gmail.com
+```
+
+Use a Gmail **app password** (Google account, 2-Step Verification on), not the login password. Gmail allows about 500 emails a day; for many shops use a transactional provider with SMTP and a domain you own (the sender address must be verified there). With `DEBUG=True` and no `EMAIL_BACKEND`, OTPs print in the `runserver` terminal instead.
+
+### Production checklist
+
+- `DEBUG=False` and **`REDIS_URL`** set (`pip install redis`). The app refuses to start without it, because throttles and logout revocation need a cache shared by all workers.
+- **`NUM_PROXIES`**: `0` when the app is exposed directly (the default); the number of proxies in front of it otherwise (for example `1` behind nginx or a load balancer). A wrong value lets clients fake their IP and bypass the login throttle.
+- Set `SECRET_KEY` and a separate `JWT_SIGNING_KEY`; rotating `JWT_SIGNING_KEY` logs everyone out.
+- Run `python manage.py migrate`, then schedule **daily**: `python manage.py flushexpiredtokens` (token tables grow with every login) and `python manage.py purge_password_otps`.
+- Copy `.env.example` to `.env`; never commit `.env`. `.env.local` was previously committed and remains in Git history, so rotate `SECRET_KEY`, `JWT_SIGNING_KEY` and the DB password if they were ever used outside local dev.
+- Rotate any API key or password that was pasted into a chat or ticket.
+
+### Known limits
+
+- Login is by username only (case-sensitive); there is no login by phone or email.
+- Throttling by IP does not stop a distributed attacker; the OTP limits in PostgreSQL are the real guard.
+- Auth tests: `python manage.py test tests.users` (about 150 tests; `tests/users/test_auth_qa.py` is the QA sweep). With `NUM_PROXIES` above 0 in `.env`, the two tests in `test_throttle_spoofing.py` fail by design.
 
 ## Management commands
 
@@ -505,5 +555,6 @@ Endpoints under `/api/v1/auth/`: `password/forgot/`, `password/reset/`, `passwor
 | `python manage.py seed_demo [--fresh]` | Load multi-tenant demo data (development only). |
 | `python manage.py audit_bills` | Read-only check of customer bills, allocations and balances. Exit status 1 means a promise is broken. Run after deploys and migrations, or when a balance looks wrong. |
 | `python manage.py audit_deliveries` | Read-only check for duplicate deliveries; run **before** applying `deliveries.0004`. |
+| `python manage.py flushexpiredtokens` | Delete expired JWT rows from the token tables. Safe to rerun; schedule it daily. |
 | `python manage.py purge_password_otps` | Delete expired or used password-reset OTPs older than one day. Safe to rerun; schedule it daily. |
 | `python manage.py spectacular --file schema.yml` | Write the OpenAPI schema to a file. |

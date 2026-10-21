@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import sys
 from pathlib import Path
 import environ
 from datetime import timedelta
@@ -190,6 +191,11 @@ EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@localhost")
 PASSWORD_RESET_OTP_TTL_MINUTES = env.int("PASSWORD_RESET_OTP_TTL_MINUTES", default=10)
+# Auth emails are sent from a background thread so the response time never reveals
+# whether an account exists. Tests send inline.
+# ponytail: in-process thread, an email is lost if the process dies mid-send (the user
+# just asks again); move to a task queue (Celery) if volume or delivery guarantees need it.
+EMAIL_ASYNC = env.bool("EMAIL_ASYNC", default="test" not in sys.argv)
 
 # Shared cache for throttle counters. locmem is per-process and NOT shared across workers.
 if env("REDIS_URL", default=""):
@@ -199,6 +205,12 @@ if env("REDIS_URL", default=""):
             "LOCATION": env("REDIS_URL"),  # needs the `redis` package installed
         }
     }
+elif not DEBUG:
+    # Throttles and logout revocation live in the cache; a per-process cache is wrong
+    # with more than one worker, so production must have a shared one.
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured("REDIS_URL is required when DEBUG is False.")
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
@@ -206,7 +218,7 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
-    "UPDATE_LAST_LOGIN": False,
+    "UPDATE_LAST_LOGIN": True,
     "SIGNING_KEY": env("JWT_SIGNING_KEY", default=SECRET_KEY),
 }
 

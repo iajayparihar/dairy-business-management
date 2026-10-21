@@ -9,13 +9,17 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
-from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import (
     TokenObtainPairSerializer,
     TokenRefreshSerializer,
 )
-from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from rest_framework_simplejwt.views import (
     TokenBlacklistView,
@@ -24,9 +28,10 @@ from rest_framework_simplejwt.views import (
     TokenVerifyView,
 )
 
-from .authentication import check_session, password_stamp
+from .authentication import check_session, password_stamp, revoke_session_access
 
 import logging
+from datetime import timedelta
 
 from . import services
 from .serializers import (
@@ -74,21 +79,43 @@ class LoginView(TokenObtainPairView):
     throttle_scope = "login"
 
 
+# A rotated token used again within this window is a double click / second tab, not theft.
+REPLAY_GRACE = timedelta(seconds=10)
+
+
 class RefreshSerializer(TokenRefreshSerializer):
     def validate(self, attrs):
-        # Serialize concurrent uses of one refresh token: simplejwt checks the
-        # blacklist and then blacklists, so parallel requests all used to pass.
-        try:
-            jti = RefreshToken(attrs["refresh"])["jti"]
+        try:  # decoded without the blacklist check, to see who is knocking
+            old = UntypedToken(attrs["refresh"])
+            if old["token_type"] != "refresh":
+                old = None
         except Exception:  # invalid token: super() raises the proper error
-            jti = None
-        with transaction.atomic():
-            if jti:
-                OutstandingToken.objects.select_for_update().filter(jti=jti).first()
-            try:
-                return super().validate(attrs)
-            except User.DoesNotExist:  # user deleted after the token was issued
-                raise InvalidToken("User no longer exists")
+            old = None
+        try:
+            # Serialize concurrent uses of one refresh token: simplejwt checks the
+            # blacklist and then blacklists, so parallel requests all used to pass.
+            with transaction.atomic():
+                if old:
+                    OutstandingToken.objects.select_for_update().filter(
+                        jti=old["jti"]
+                    ).first()
+                try:
+                    return super().validate(attrs)
+                except User.DoesNotExist:  # user deleted after the token was issued
+                    raise InvalidToken("User no longer exists")
+        except (InvalidToken, TokenError):
+            if old and BlacklistedToken.objects.filter(
+                token__jti=old["jti"],
+                blacklisted_at__lt=timezone.now() - REPLAY_GRACE,
+            ).exists():
+                # An already-used refresh token came back: assume it was stolen and
+                # end this user's sessions. ponytail: all devices, not just this one
+                # (OutstandingToken has no session id); add one if that hurts.
+                user = User.objects.filter(pk=old["user_id"]).first()
+                if user:
+                    services.revoke_user_tokens(user)
+                    revoke_session_access(old.get("sid"))
+            raise
 
 
 class RefreshView(TokenRefreshView):
@@ -191,11 +218,7 @@ class LogoutView(TokenBlacklistView):
         if sid:
             # ponytail: cache-backed; needs the shared (Redis) cache in production
             try:
-                cache.set(
-                    f"revoked_sid:{sid}",
-                    1,
-                    int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
-                )
+                revoke_session_access(sid)
             except Exception:  # refresh token is already blacklisted: do not fail logout
                 logger.exception("Could not revoke access tokens of the session")
         return response

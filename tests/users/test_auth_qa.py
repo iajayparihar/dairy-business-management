@@ -4,7 +4,6 @@ Each test states the behaviour a production API should have. A failing test is a
 """
 import re
 import threading
-import unittest
 from datetime import timedelta
 from unittest import mock
 
@@ -147,7 +146,6 @@ class LoginQA(Base, TestCase):
         self.assertEqual(d(a), 30 * 60)
         self.assertEqual(d(r), 7 * 86400)
 
-    @unittest.expectedFailure  # open finding, see QA report
     def test_login_records_last_login(self):
         self.login()
         self.user.refresh_from_db()
@@ -175,13 +173,22 @@ class RefreshQA(Base, TestCase):
         self.assertEqual(set(ok.json()), {"access", "refresh"})
         self.assertEqual(self.post(REFRESH, {"refresh": r}).status_code, 401)
 
-    @unittest.expectedFailure  # open finding, see QA report
     def test_replay_of_rotated_token_kills_the_session(self):
         """Reuse of a rotated refresh token signals theft: the new token should die too."""
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+
         r, _ = pair(self.user)
         new = self.post(REFRESH, {"refresh": r}).json()
-        self.post(REFRESH, {"refresh": r})  # attacker replays the old one
+        BlacklistedToken.objects.update(blacklisted_at=timezone.now() - timedelta(minutes=1))
+        self.assertEqual(self.post(REFRESH, {"refresh": r}).status_code, 401)  # attacker
         self.assertEqual(self.post(REFRESH, {"refresh": new["refresh"]}).status_code, 401)
+        self.assertEqual(self.post(CHANGE, {}, new["access"]).status_code, 401)
+
+    def test_quick_double_refresh_is_not_treated_as_theft(self):
+        r, _ = pair(self.user)
+        new = self.post(REFRESH, {"refresh": r}).json()
+        self.assertEqual(self.post(REFRESH, {"refresh": r}).status_code, 401)  # second tab
+        self.assertEqual(self.post(REFRESH, {"refresh": new["refresh"]}).status_code, 200)
 
     def test_access_token_cannot_refresh(self):
         _, a = pair(self.user)
@@ -487,7 +494,6 @@ class ForgotQA(Base, TestCase):
             self.assertEqual(self.post(FORGOT, {"identifier": "qa_user"}).status_code, 200)
         self.assertFalse(PasswordResetOTP.objects.filter(used_at__isnull=True).exists())
 
-    @unittest.expectedFailure  # open finding, see QA report
     def test_response_time_does_not_depend_on_account_existence(self):
         """send_mail runs inside the request: a slow SMTP makes existing accounts distinguishable."""
         import time
@@ -495,7 +501,8 @@ class ForgotQA(Base, TestCase):
         def slow(*a, **k):
             time.sleep(0.3)
 
-        with mock.patch("apps.users.services.send_mail", side_effect=slow):
+        with override_settings(EMAIL_ASYNC=True), self.captureOnCommitCallbacks(execute=True), \
+                mock.patch("apps.users.services.send_mail", side_effect=slow):
             t0 = time.perf_counter()
             self.post(FORGOT, {"identifier": "qa_user"})
             known = time.perf_counter() - t0
@@ -715,7 +722,6 @@ class ChangeQA(Base, TestCase):
             codes = [self.change(old="bad").status_code for _ in range(4)]
         self.assertEqual(codes, [400, 400, 400, 429])
 
-    @unittest.expectedFailure  # open finding, see QA report
     def test_user_gets_notified_by_email_of_password_change(self):
         self.change()
         self.assertEqual(len(mail.outbox), 1)

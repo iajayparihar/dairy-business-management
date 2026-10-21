@@ -1,5 +1,6 @@
 import logging
 import secrets
+import threading
 from datetime import timedelta
 
 from django.conf import settings
@@ -7,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
@@ -24,6 +25,39 @@ User = get_user_model()
 
 OTP_MAX_ATTEMPTS = 5
 OTP_RESEND_COOLDOWN = timedelta(seconds=60)
+
+
+def send_email(subject, body, to, on_fail=None):
+    """Send off the request thread (after commit) so timing never leaks account state."""
+
+    def run():
+        try:
+            send_mail(subject, body, None, [to])
+        except Exception:
+            logger.exception("Email %r failed", subject)
+            if on_fail:
+                on_fail()
+        finally:
+            if settings.EMAIL_ASYNC:
+                connection.close()  # this thread's own connection
+
+    if settings.EMAIL_ASYNC:
+        transaction.on_commit(
+            lambda: threading.Thread(target=run, daemon=True).start()
+        )
+    else:
+        run()
+
+
+def _notify_password_changed(user):
+    if user.email:
+        send_email(
+            "Your password was changed",
+            "The password of your account was just changed and you were signed out "
+            "everywhere. If this was not you, reset your password now and contact "
+            "your administrator.",
+            user.email,
+        )
 
 
 class InvalidOTP(Exception):
@@ -78,22 +112,19 @@ def issue_otp(identifier):
         )
         code = f"{secrets.randbelow(10**6):06d}"
         ttl = settings.PASSWORD_RESET_OTP_TTL_MINUTES
-        PasswordResetOTP.objects.create(
+        otp_id = PasswordResetOTP.objects.create(
             user=locked,
             code_hash=_hash(locked, code),
             expires_at=now + timedelta(minutes=ttl),
+        ).pk
+        send_email(
+            "Your password reset code",
+            f"Your OTP is {code}. It expires in {ttl} minutes. "
+            "If you did not request this, ignore this email.",
+            locked.email,
+            # drop the unusable OTP so the user can ask again straight away
+            on_fail=lambda: PasswordResetOTP.objects.filter(pk=otp_id).delete(),
         )
-        try:
-            send_mail(
-                "Your password reset code",
-                f"Your OTP is {code}. It expires in {ttl} minutes. "
-                "If you did not request this, ignore this email.",
-                None,
-                [locked.email],
-            )
-        except Exception:
-            logger.exception("Password reset email failed for user_id=%s", locked.pk)
-            transaction.set_rollback(True)  # drops the new OTP, restores old state
 
 
 def reset_password(identifier, code, new_password):
@@ -121,6 +152,7 @@ def reset_password(identifier, code, new_password):
                 otp.used_at = now
                 otp.save(update_fields=["used_at"])
                 revoke_user_tokens(locked)
+                _notify_password_changed(locked)
                 ok = True
             else:
                 otp.attempts += 1
@@ -142,4 +174,5 @@ def change_password(user, old_password, new_password):
         locked.set_password(new_password)
         locked.save(update_fields=["password"])
         revoke_user_tokens(locked)
+        _notify_password_changed(locked)
     return True

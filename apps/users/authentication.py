@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.cache import cache
 from django.utils.crypto import salted_hmac
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -7,6 +8,15 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 def password_stamp(user):
     """Changes whenever the password hash changes, so old tokens stop working."""
     return salted_hmac("jwt-password-stamp", user.password).hexdigest()[:16]
+
+
+def revoke_session_access(sid):
+    """Kill the access tokens of one login session (until they would expire anyway)."""
+    cache.set(
+        f"revoked_sid:{sid}",
+        1,
+        int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+    )
 
 
 def check_session(token, user):
