@@ -1,16 +1,28 @@
 from django.core.cache import cache
+from django.utils.crypto import salted_hmac
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 
 
-class RevocableJWTAuthentication(JWTAuthentication):
-    """JWT auth that rejects access tokens whose session was logged out."""
+def password_stamp(user):
+    """Changes whenever the password hash changes, so old tokens stop working."""
+    return salted_hmac("jwt-password-stamp", user.password).hexdigest()[:16]
 
-    def get_validated_token(self, raw_token):
-        token = super().get_validated_token(raw_token)
-        if cache.get(f"revoked_sid:{token.get('sid')}"):
-            raise InvalidToken("Token has been revoked")
-        return token
+
+def check_session(token, user):
+    """Reject tokens of a logged-out session or issued before the last password change."""
+    if cache.get(f"revoked_sid:{token.get('sid')}"):
+        raise InvalidToken("Token has been revoked")
+    stamp = token.get("pwd")  # tokens issued before this claim existed carry none
+    if stamp is not None and stamp != password_stamp(user):
+        raise InvalidToken("Token has been revoked")
+
+
+class RevocableJWTAuthentication(JWTAuthentication):
+    def get_user(self, validated_token):
+        user = super().get_user(validated_token)
+        check_session(validated_token, user)
+        return user
 
 
 try:

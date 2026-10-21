@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import transaction
 from django.db.models import Q
@@ -130,11 +131,15 @@ def reset_password(identifier, code, new_password):
 
 def change_password(user, old_password, new_password):
     """Returns False if old_password is wrong. Raises ValidationError if weak."""
-    if not user.check_password(old_password):
-        return False
-    validate_password(new_password, user)
     with transaction.atomic():
-        user.set_password(new_password)
-        user.save(update_fields=["password"])
-        revoke_user_tokens(user)
+        # Lock so two parallel changes cannot both pass the old-password check.
+        locked = User.objects.select_for_update().get(pk=user.pk)
+        if not locked.check_password(old_password):
+            return False
+        if old_password == new_password:
+            raise DjangoValidationError("New password must be different from the old one.")
+        validate_password(new_password, locked)
+        locked.set_password(new_password)
+        locked.save(update_fields=["password"])
+        revoke_user_tokens(locked)
     return True

@@ -30,8 +30,10 @@ class RejectNullBytesMiddleware:
                 bad = _has_nul(json.loads(request.body))
             except ValueError:
                 pass  # malformed JSON is the view's 400 to give
+            except RecursionError:
+                bad = True  # absurdly nested JSON would crash every parser downstream
         if bad:
             return JsonResponse(
-                {"detail": "Null characters are not allowed."}, status=400
+                {"detail": "Null characters or excessive nesting are not allowed."}, status=400
             )
         return self.get_response(request)

@@ -6,10 +6,27 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView
+from django.db import transaction
+from rest_framework.exceptions import ValidationError
+from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.serializers import (
+    TokenObtainPairSerializer,
+    TokenRefreshSerializer,
+)
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
+from rest_framework_simplejwt.views import (
+    TokenBlacklistView,
+    TokenObtainPairView,
+    TokenRefreshView,
+    TokenVerifyView,
+)
+
+from .authentication import check_session, password_stamp
+
+import logging
 
 from . import services
 from .serializers import (
@@ -18,6 +35,9 @@ from .serializers import (
     ResetPasswordSerializer,
 )
 
+
+logger = logging.getLogger(__name__)
+User = get_user_model()
 
 _Detail = inline_serializer("Detail", {"detail": serializers.CharField()})
 
@@ -30,12 +50,21 @@ def _doc(request):
 
 
 class LoginSerializer(TokenObtainPairSerializer):
+    # Passwords are stored exactly as typed (change / reset keep spaces), so login
+    # must not trim them either.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["password"] = serializers.CharField(
+            write_only=True, trim_whitespace=False, style={"input_type": "password"}
+        )
+
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
         # Session id: copied into every access token and rotated refresh token,
         # so logout can kill the access tokens too.
         token["sid"] = token["jti"]
+        token["pwd"] = password_stamp(user)  # dies with the password
         return token
 
 
@@ -43,6 +72,45 @@ class LoginView(TokenObtainPairView):
     serializer_class = LoginSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
+
+
+class RefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs):
+        # Serialize concurrent uses of one refresh token: simplejwt checks the
+        # blacklist and then blacklists, so parallel requests all used to pass.
+        try:
+            jti = RefreshToken(attrs["refresh"])["jti"]
+        except Exception:  # invalid token: super() raises the proper error
+            jti = None
+        with transaction.atomic():
+            if jti:
+                OutstandingToken.objects.select_for_update().filter(jti=jti).first()
+            try:
+                return super().validate(attrs)
+            except User.DoesNotExist:  # user deleted after the token was issued
+                raise InvalidToken("User no longer exists")
+
+
+class RefreshView(TokenRefreshView):
+    serializer_class = RefreshSerializer
+
+
+class VerifyView(TokenVerifyView):
+    """Also rejects tokens of deleted / inactive users and revoked sessions."""
+
+    def post(self, request, *args, **kwargs):
+        try:
+            response = super().post(request, *args, **kwargs)
+        except ValidationError as e:
+            if "non_field_errors" in e.detail:  # blacklisted: same 401 as any bad token
+                raise InvalidToken("Token is blacklisted")
+            raise
+        token = UntypedToken(request.data["token"])
+        user = User.objects.filter(pk=token["user_id"], is_active=True).first()
+        if user is None:
+            raise InvalidToken("User not found or inactive")
+        check_session(token, user)
+        return response
 
 
 class _PasswordView(APIView):
@@ -122,9 +190,12 @@ class LogoutView(TokenBlacklistView):
         response = super().post(request, *args, **kwargs)
         if sid:
             # ponytail: cache-backed; needs the shared (Redis) cache in production
-            cache.set(
-                f"revoked_sid:{sid}",
-                1,
-                int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
-            )
+            try:
+                cache.set(
+                    f"revoked_sid:{sid}",
+                    1,
+                    int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+                )
+            except Exception:  # refresh token is already blacklisted: do not fail logout
+                logger.exception("Could not revoke access tokens of the session")
         return response
