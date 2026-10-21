@@ -134,7 +134,7 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.users.authentication.RevocableJWTAuthentication",
     ],
     # Counters live in the default cache; production needs a shared CACHES backend
     # (set REDIS_URL). NUM_PROXIES = trusted proxies in front of the app. 0 (default)

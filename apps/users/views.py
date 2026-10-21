@@ -5,7 +5,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from django.conf import settings
+from django.core.cache import cache
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView
 
 from . import services
 from .serializers import (
@@ -25,7 +29,18 @@ def _doc(request):
     )
 
 
+class LoginSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        # Session id: copied into every access token and rotated refresh token,
+        # so logout can kill the access tokens too.
+        token["sid"] = token["jti"]
+        return token
+
+
 class LoginView(TokenObtainPairView):
+    serializer_class = LoginSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
 
@@ -94,3 +109,22 @@ class ChangePasswordView(_PasswordView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"detail": "Password changed. Please log in again."})
+
+
+class LogoutView(TokenBlacklistView):
+    """Blacklist the refresh token and revoke the access tokens of its session."""
+
+    def post(self, request, *args, **kwargs):
+        try:
+            sid = RefreshToken(request.data.get("refresh")).get("sid")
+        except Exception:  # invalid token: the parent view returns the proper error
+            sid = None
+        response = super().post(request, *args, **kwargs)
+        if sid:
+            # ponytail: cache-backed; needs the shared (Redis) cache in production
+            cache.set(
+                f"revoked_sid:{sid}",
+                1,
+                int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+            )
+        return response
