@@ -135,7 +135,6 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
     ],
     # Counters live in the default cache; production needs a shared CACHES backend
     # (set REDIS_URL). NUM_PROXIES = trusted proxies in front of the app. 0 (default)
@@ -156,6 +155,9 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Dairy Business Management API",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # The API itself is JWT-only. Only the docs pages accept the admin session
+    # (a browser cannot send a Bearer header when it opens /api/docs/).
+    "SERVE_AUTHENTICATION": ["rest_framework.authentication.SessionAuthentication"],
     "POSTPROCESSING_HOOKS": [
         "drf_spectacular.hooks.postprocess_schema_enums",
         "config.swagger.group_by_domain",
