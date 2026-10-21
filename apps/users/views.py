@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import status
+from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
+from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -14,6 +15,16 @@ from .serializers import (
 )
 
 
+_Detail = inline_serializer("Detail", {"detail": serializers.CharField()})
+
+
+def _doc(request):
+    return extend_schema(
+        request=request,
+        responses={200: _Detail, 400: OpenApiResponse(description="Validation error")},
+    )
+
+
 class LoginView(TokenObtainPairView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
@@ -23,6 +34,7 @@ class _PasswordView(APIView):
     throttle_classes = [ScopedRateThrottle]
 
 
+@_doc(ForgotPasswordSerializer)
 class ForgotPasswordView(_PasswordView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -35,6 +47,7 @@ class ForgotPasswordView(_PasswordView):
         return Response({"detail": "If the account exists, an OTP has been sent."})
 
 
+@_doc(ResetPasswordSerializer)
 class ResetPasswordView(_PasswordView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -58,6 +71,7 @@ class ResetPasswordView(_PasswordView):
         return Response({"detail": "Password reset successful."})
 
 
+@_doc(ChangePasswordSerializer)
 class ChangePasswordView(_PasswordView):
     permission_classes = [IsAuthenticated]
     throttle_scope = "password_change"
