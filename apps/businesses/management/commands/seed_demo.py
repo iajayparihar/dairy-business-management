@@ -3,7 +3,8 @@ import time
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
+from django.db.migrations.executor import MigrationExecutor
 
 from apps.businesses.models import Business
 from apps.businesses.seed import (
@@ -45,6 +46,15 @@ class Command(BaseCommand):
     def handle(self, *args, fresh=False, **options):
         if not settings.DEBUG:
             raise CommandError("seed_demo runs only with DEBUG=True (never on production data).")
+        db = connection.settings_dict
+        self.stdout.write(f"Database: {db['NAME']} on {db['HOST']}:{db['PORT']}")
+        pending = MigrationExecutor(connection).migration_plan(
+            MigrationExecutor(connection).loader.graph.leaf_nodes()
+        )
+        if pending:
+            raise CommandError(
+                f"{db['NAME']} has {len(pending)} unapplied migration(s). Run migrate first."
+            )
         if fresh:
             call_command("flush", interactive=False, verbosity=0)
         elif Business.all_objects.filter(slug="abhigyan-dairy").exists():

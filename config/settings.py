@@ -156,6 +156,16 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Dairy Business Management API",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "config.swagger.group_by_domain",
+    ],
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,   # keep the JWT after a page refresh
+        "operationsSorter": "alpha",
+        "docExpansion": "none",         # collapsed: open one section at a time
+        "filter": True,                 # search box
+    },
     # API docs are public in DEBUG only; in production they need an admin session.
     "SERVE_PERMISSIONS": [
         "rest_framework.permissions.AllowAny" if DEBUG else "rest_framework.permissions.IsAdminUser"

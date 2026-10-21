@@ -290,17 +290,25 @@ ALTER USER dairy_user CREATEDB;
 
 **Development note:** Use separate credentials and environment configuration for development, testing, and production. Back up important data before making database or migration changes.
 
-# Test Cmd
+## Test Cmd
+
 ## run all of the tests
 
-python manage.py test 
+python manage.py test
 
 ## run specific tests so change the module name
+
 python manage.py test tests.payment
 
-
 python manage.py test tests.payment --verbosity 2
+
 ## Password recovery (OTP)
+
+## unset DB_NAME
+
+## seeding
+
+python manage.py seed_demo --fresh
 
 Endpoints under `/api/v1/auth/`: `password/forgot/`, `password/reset/`, `password/change/` (login/refresh/verify/logout unchanged).
 
