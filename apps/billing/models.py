@@ -408,6 +408,75 @@ class CustomerBillLine(models.Model):
         raise ValueError("Bill lines cannot be deleted.")
 
 
+class CustomerBillCancelledLine(models.Model):
+    """
+    A delivery or shop credit-sale line that was CANCELLED (or corrected) inside the bill's
+    period, copied when the bill was finalized. It is shown beside the live lines so the
+    customer and the owner see both the wrong and the right entry, but it is never part of
+    the total, the balance or any allocation.
+    """
+
+    objects = BillLineManager()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        Business, on_delete=models.PROTECT, related_name="customer_bill_cancelled_lines",
+    )
+    bill = models.ForeignKey(
+        CustomerBill, on_delete=models.PROTECT, related_name="cancelled_lines",
+    )
+    delivery = models.ForeignKey(
+        Delivery, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    sale_line = models.ForeignKey(
+        "sales.SaleLine", on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    line_kind = models.CharField(max_length=15, choices=CustomerBillLine.Kind.choices)
+    description = models.CharField(max_length=200)
+    unit = models.CharField(max_length=10)
+    delivered_at = models.DateTimeField()
+    shift = models.CharField(max_length=10, blank=True, default="")
+    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    # What the cancelled entry would have charged; informational only.
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "billing_customer_bill_cancelled_line"
+        ordering = ["delivered_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["bill", "delivery"], condition=Q(delivery__isnull=False),
+                name="uniq_bill_cancelled_delivery",
+            ),
+            models.UniqueConstraint(
+                fields=["bill", "sale_line"], condition=Q(sale_line__isnull=False),
+                name="uniq_bill_cancelled_sale_line",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(delivery__isnull=False, sale_line__isnull=True)
+                    | Q(delivery__isnull=True, sale_line__isnull=False)
+                ),
+                name="bill_cancelled_line_one_source",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Bill lines are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Bill lines cannot be deleted.")
+
+
 class CustomerPayment(models.Model):
     """Money received from a customer. Immutable; fix with a reversal."""
 

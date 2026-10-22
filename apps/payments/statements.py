@@ -10,7 +10,7 @@ from django.utils import timezone
 from apps.businesses.models import Business
 from apps.payments.models import SupplierPayment, SupplierPaymentReversal
 from apps.payments.selectors import get_supplier_position
-from apps.purchases.models import PurchaseAdjustment, SupplierPurchase
+from apps.purchases.models import MilkCollection, PurchaseAdjustment, SupplierPurchase
 from apps.suppliers.models import Supplier
 
 
@@ -185,6 +185,40 @@ def get_supplier_account_statement(
             "debit": reversal.amount,
             "credit": ZERO,
         })
+
+    # Cancelled milk entries (wrong can, or the wrong half of a correction) are listed for
+    # transparency. They carry no debit or credit, so the balance never moves for them.
+    cancelled = list(
+        _range_filter(
+            MilkCollection.objects.filter(
+                business_id=business_id, supplier_id=supplier_id,
+                status=MilkCollection.Status.CANCELLED,
+            ),
+            "collected_at", start_at, end_at,
+        )
+    )
+    replacements = dict(
+        MilkCollection.objects.filter(replaces_id__in=[c.pk for c in cancelled])
+        .values_list("replaces_id", "collection_number")
+    )
+    for c in cancelled:
+        note = f"Cancelled: {c.cancel_reason}" if c.cancel_reason else "Cancelled"
+        if c.pk in replacements:
+            note += f" (replaced by MILK-{replacements[c.pk]})"
+        events.append({
+            "timestamp": c.collected_at,
+            "priority": 1,
+            "type": "MILK_CANCELLED",
+            "reference": f"MILK-{c.collection_number}",  # same form as the mirror purchase
+            "description": note,
+            "amount": c.amount,
+            "debit": ZERO,
+            "credit": ZERO,
+            "counted": False,
+        })
+
+    for event in events:
+        event.setdefault("counted", True)
 
     # Stable ordering for events that share a timestamp.
     events.sort(

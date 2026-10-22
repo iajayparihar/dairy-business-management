@@ -34,11 +34,11 @@
   <tbody>
     <tr class="opening"><td colspan="6">Opening balance</td><td class="num">{{ s.opening_balance }}</td></tr>
     {% for t in rows %}
-    <tr>
+    <tr{% if not t.counted %} style="color:#777"{% endif %}>
       <td>{{ t.local_time|date:"d M Y H:i" }}</td>
       <td>{{ t.type }}</td>
       <td>{{ t.reference }}</td>
-      <td>{{ t.description }}</td>
+      <td>{{ t.description }}{% if not t.counted %} (was {{ t.amount }}, not counted){% endif %}</td>
       <td class="num">{% if t.debit %}{{ t.debit }}{% endif %}</td>
       <td class="num">{% if t.credit %}{{ t.credit }}{% endif %}</td>
       <td class="num">{{ t.balance }}</td>

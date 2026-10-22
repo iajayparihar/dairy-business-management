@@ -18,7 +18,12 @@ from django.utils import timezone
 
 from apps.billing import selectors
 from apps.billing.locks import lock_customer
-from apps.billing.models import CustomerBill, CustomerBillLine, CustomerPayment
+from apps.billing.models import (
+    CustomerBill,
+    CustomerBillCancelledLine,
+    CustomerBillLine,
+    CustomerPayment,
+)
 from apps.billing.money import to_money
 from apps.billing.payment_services import (
     apply_credit_to_bill,
@@ -194,6 +199,50 @@ def build_bill_lines(business, customer_id, period_start, period_end):
     ]
     rows.sort(key=lambda r: (r["delivered_at"], str(r["delivery_id"] or r["sale_line_id"])))
     return rows, warnings
+
+
+def build_cancelled_rows(business, customer_id, period_start, period_end):
+    """
+    Deliveries and shop credit-sale lines of the period that were cancelled (a cancelled
+    delivery that was corrected is the "wrong" half of the pair; its replacement is a live
+    line). Shown on the bill for transparency, never charged.
+    """
+    kinds, _ = _milk_kinds(business.pk)
+    start_at, end_at = period_bounds(business, period_start, period_end)
+    deliveries = Delivery.objects.filter(
+        business_id=business.pk, customer_id=customer_id,
+        status=Delivery.Status.CANCELLED,
+        delivered_at__gte=start_at, delivered_at__lt=end_at,
+    ).select_related("product")
+    rows = [
+        {
+            "delivery_id": d.pk, "sale_line_id": None, "product_id": d.product_id,
+            "line_kind": kinds.get(d.product_id, Kind.OTHER),
+            "description": d.product.name, "unit": d.product.unit,
+            "delivered_at": d.delivered_at, "shift": d.shift,
+            "quantity": d.quantity, "unit_price": d.unit_price, "amount": d.line_total,
+            "cancelled_at": d.cancelled_at, "cancel_reason": d.cancel_reason,
+        }
+        for d in deliveries
+    ]
+    sale_lines = SaleLine.objects.filter(
+        sale__business_id=business.pk, sale__customer_id=customer_id,
+        sale__payment_mode=Sale.PaymentMode.CREDIT, sale__status=Sale.Status.CANCELLED,
+        sale__sold_at__gte=start_at, sale__sold_at__lt=end_at,
+    ).select_related("sale")
+    rows += [
+        {
+            "delivery_id": None, "sale_line_id": line.pk, "product_id": line.product_id,
+            "line_kind": kinds.get(line.product_id, Kind.OTHER),
+            "description": line.description, "unit": line.unit,
+            "delivered_at": line.sale.sold_at, "shift": "",
+            "quantity": line.quantity, "unit_price": line.unit_price, "amount": line.line_total,
+            "cancelled_at": line.sale.cancelled_at, "cancel_reason": line.sale.cancel_reason,
+        }
+        for line in sale_lines
+    ]
+    rows.sort(key=lambda r: (r["delivered_at"], str(r["delivery_id"] or r["sale_line_id"])))
+    return rows
 
 
 def _number_prefix(customer, day, opening=False):
@@ -550,6 +599,12 @@ def finalize_bill(*, business_id, bill_id, user, expected_total=None):
     CustomerBillLine.objects.bulk_create([
         CustomerBillLine(business_id=business_id, bill=bill, **row)
         for row in rows
+    ])
+    CustomerBillCancelledLine.objects.bulk_create([
+        CustomerBillCancelledLine(business_id=business_id, bill=bill, **row)
+        for row in build_cancelled_rows(
+            business, customer.pk, bill.period_start, bill.period_end
+        )
     ])
 
     bill.credit_applied = apply_credit_to_bill(bill=bill)

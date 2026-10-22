@@ -127,3 +127,57 @@ class RateCorrectionQA(Base, TestCase):
         live = SupplierMilkRate.objects.filter(milk_type="BUFFALO", cancelled_at__isnull=True)
         self.assertEqual(sorted(str(x.rate) for x in live), ["15.00", "15.00", "17.00"])
         self.assertEqual(MilkCollection.objects.filter(status="RECORDED", applied_rate="17.00").count(), 3)
+
+
+@FAST
+class StatementShowsWrongAndRightQA(Base, TestCase):
+    """The supplier statement lists a cancelled can beside its replacement; the balance only follows the live one."""
+
+    def setUp(self):
+        super().setUp()
+        day = (timezone.now() - timedelta(days=3)).replace(hour=6, minute=0, second=0, microsecond=0)
+        self.first = self.post(collected_at=day.isoformat(), litres="10", fat="9").json()
+        self.fix = self.api(self.owner).post(
+            f"{self.url}{self.first['id']}/correct/", {"reason": "weighed again", "litres": "11"}, format="json").json()["collection"]
+        self.s = f"{self.base}suppliers/{self.sup.pk}/"
+        self.window = {"start_date": (timezone.now() - timedelta(days=10)).date().isoformat(),
+                       "end_date": timezone.now().date().isoformat()}
+
+    def statement(self):
+        return self.api(self.owner).get(self.s + "statement/", self.window).json()
+
+    def test_both_entries_are_listed_but_only_the_new_one_counts(self):
+        st = self.statement()
+        rows = [t for t in st["transactions"] if t["type"] in ("PURCHASE", "MILK_CANCELLED")]
+        by = {t["reference"]: t for t in rows}
+        old, new = by["MILK-" + self.first["collection_number"]], by["MILK-" + self.fix["collection_number"]]
+        self.assertEqual((old["type"], old["counted"], old["debit"], old["credit"], old["amount"]), ("MILK_CANCELLED", False, "0.00", "0.00", "1350.00"))
+        self.assertIn("weighed again", old["description"])
+        self.assertIn(self.fix["collection_number"], old["description"])
+        self.assertEqual((new["type"], new["counted"], new["debit"]), ("PURCHASE", True, "1485.00"))
+        self.assertEqual(st["closing_balance"], "1485.00")
+
+    def test_balance_and_closing_ignore_the_cancelled_row(self):
+        st = self.statement()
+        bal = self.api(self.owner).get(self.s + "balance/").json()
+        self.assertEqual(st["closing_balance"], bal["outstanding_amount"])
+        last = st["transactions"][-1]
+        self.assertEqual(last["balance"], st["closing_balance"])
+
+    def test_print_view_marks_the_cancelled_row(self):
+        html = self.api(self.owner).get(self.s + "statement/print/", self.window).content.decode()
+        self.assertIn("MILK_CANCELLED", html)
+        self.assertIn("not counted", html)
+
+    def test_cancelled_rows_outside_the_period_are_not_shown(self):
+        far = {"start_date": "2020-01-01", "end_date": "2020-02-01"}
+        st = self.api(self.owner).get(self.s + "statement/", far).json()
+        self.assertEqual([t for t in st["transactions"] if t["type"] == "MILK_CANCELLED"], [])
+
+    def test_a_plain_cancel_without_replacement_is_listed_too(self):
+        day = (timezone.now() - timedelta(days=2)).replace(hour=7, minute=0, second=0, microsecond=0)
+        c = self.post(collected_at=day.isoformat(), litres="4", fat="8").json()
+        self.api(self.owner).post(f"{self.url}{c['id']}/cancel/", {"reason": "wrong can"}, format="json")
+        rows = [t for t in self.statement()["transactions"] if t["reference"] == "MILK-" + c["collection_number"]]
+        self.assertEqual([r["type"] for r in rows], ["MILK_CANCELLED"])
+        self.assertNotIn("replaced by", rows[0]["description"])

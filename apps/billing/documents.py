@@ -10,7 +10,7 @@ from decimal import Decimal
 from django.utils import timezone
 
 from apps.billing import selectors
-from apps.billing.bill_services import build_bill_lines
+from apps.billing.bill_services import build_bill_lines, build_cancelled_rows
 from apps.billing.models import CustomerBill, CustomerBillLine
 from apps.businesses.models import Business
 
@@ -50,6 +50,20 @@ def _stored_rows(bill):
             "amount": line.amount,
         }
         for line in bill.lines.all()
+    ]
+
+
+def _stored_cancelled(bill):
+    return [
+        {
+            "delivery_id": line.delivery_id, "sale_line_id": line.sale_line_id,
+            "line_kind": line.line_kind, "description": line.description,
+            "unit": line.unit, "delivered_at": line.delivered_at, "shift": line.shift,
+            "quantity": line.quantity, "unit_price": line.unit_price,
+            "amount": line.amount, "cancelled_at": line.cancelled_at,
+            "cancel_reason": line.cancel_reason,
+        }
+        for line in bill.cancelled_lines.all()
     ]
 
 
@@ -112,12 +126,16 @@ def bill_document(bill):
         rows, warnings = build_bill_lines(
             business, bill.customer_id, bill.period_start, bill.period_end
         )
+        cancelled = build_cancelled_rows(
+            business, bill.customer_id, bill.period_start, bill.period_end
+        )
         snapshot = {}
         balance_before = selectors.get_customer_position(
             business_id=bill.business_id, customer_id=bill.customer_id
         )["net_balance"]
     else:
         rows = _stored_rows(bill)
+        cancelled = _stored_cancelled(bill)
         snapshot = bill.header_snapshot
         balance_before = bill.balance_before
 
@@ -134,6 +152,7 @@ def bill_document(bill):
     document.update({
         "live": live,
         "header": snapshot,
+        # Live lines (charged) and cancelled lines (shown, never charged), in time order.
         "lines": [
             {
                 "delivered_at": r["delivered_at"], "shift": r["shift"],
@@ -141,8 +160,15 @@ def bill_document(bill):
                 "kind": r["line_kind"], "product": r["description"],
                 "unit": r["unit"], "quantity": quantity(r["quantity"]),
                 "rate": money(r["unit_price"]), "amount": money(r["amount"]),
+                "cancelled": bool(r.get("cancelled")),
+                "counted_in_total": not r.get("cancelled"),
+                "cancelled_at": r.get("cancelled_at"),
+                "cancel_reason": r.get("cancel_reason", ""),
             }
-            for r in rows
+            for r in sorted(
+                rows + [{**c, "cancelled": True} for c in cancelled],
+                key=lambda r: (r["delivered_at"], bool(r.get("cancelled"))),
+            )
         ],
         "summary": [
             {**s, "rate": money(s["rate"]), "quantity": quantity(s["quantity"]),
@@ -154,6 +180,8 @@ def bill_document(bill):
             "buffalo_litres": quantity(totals["buffalo_litres"]),
             "other_amount": money(totals["other_amount"]),
             "total": money(totals["total"]),
+            "cancelled_lines": len(cancelled),
+            "cancelled_not_charged": money(sum((c["amount"] for c in cancelled), ZERO)),
         },
         "account": {
             "balance_before": money(balance_before),

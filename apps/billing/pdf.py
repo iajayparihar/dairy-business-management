@@ -34,6 +34,8 @@ LABELS = {
         "prev_zero": "Previous balance", "payable": "Amount payable",
         "advance_left": "Advance remaining", "issued": "Issued {} ({})",
         "void": "VOID: {}", "stamp": "VOID",
+        "cancelled_title": "Cancelled / corrected entries (not charged, shown for transparency)",
+        "cancelled": "Cancelled", "reason": "Reason",
     },
     "hi": {
         "money": "₹ {}", "date": "%d-%m-%Y",
@@ -45,6 +47,8 @@ LABELS = {
         "prev_zero": "पिछला शेष", "payable": "कुल देय राशि",
         "advance_left": "शेष अग्रिम", "issued": "जारी {} ({})",
         "void": "रद्द: {}", "stamp": "रद्द / VOID",
+        "cancelled_title": "रद्द / सुधारी गई प्रविष्टियाँ (शुल्क नहीं, पारदर्शिता के लिए)",
+        "cancelled": "रद्द", "reason": "कारण",
     },
 }
 
@@ -111,6 +115,29 @@ def render_bill_pdf(bill, lang=None):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story += [table, Spacer(1, 6 * mm)]
+
+    cancelled = [l for l in doc_data["lines"] if l["cancelled"]]
+    if cancelled:
+        story.append(line(t["cancelled_title"], 10, bold=True))
+        crow = [row([t["item"], t["quantity"], t["rate"], t["cancelled"]], bold=True)]
+        for c in cancelled:
+            when = c["delivered_at"].astimezone(tz)
+            reason = (c["cancel_reason"] or "").strip()
+            label = f"{day(when)} {c['product']}"
+            if reason:
+                label += f" ({t['reason']}: {reason[:80]})"
+            crow.append(row([
+                label, f"{c['quantity']} {c['unit']}", rs(c["rate"]), rs(c["amount"]),
+            ]))
+        ctable = Table(crow, colWidths=widths, repeatRows=1)
+        ctable.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("TEXTCOLOR", (0, 1), (-1, -1), colors.grey),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story += [ctable, Spacer(1, 6 * mm)]
 
     if before > 0:
         first = [t["prev_due"], rs(before)]

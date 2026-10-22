@@ -4,6 +4,7 @@ from apps.common.admin_mixins import ReadOnlyAdmin
 
 from apps.billing.models import (
     CustomerBill,
+    CustomerBillCancelledLine,
     CustomerBillLine,
     CustomerPayment,
     CustomerPaymentAllocation,
@@ -52,6 +53,7 @@ class CustomerPaymentAdmin(ReadOnlyAdmin):
 
 
 for model in (
+    CustomerBillCancelledLine,
     CustomerBillLine,
     CustomerPaymentAllocation,
     CustomerPaymentReversal,
