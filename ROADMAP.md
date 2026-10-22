@@ -167,7 +167,7 @@ Client need: know where each day's milk went (door-to-door, shop, dahi, ghee, ..
 
 Client constraints: phone or small tablet at the counter; very simple; delivery boy may use it in the field; customers should not have to install anything.
 
-- ❌ Decide: PWA vs native vs React Native
+- 🟡 Decided: Flutter (Android + iOS). Full plan and roadmap: [MOBILE_APP_PLAN.md](MOBILE_APP_PLAN.md) (draft, awaiting approval)
 - ❌ Login and business selection
 - ❌ Daily delivery entry screen
 - ❌ Milk collection entry screen
