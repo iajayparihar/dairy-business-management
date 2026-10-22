@@ -19,6 +19,9 @@ class SupplierMilkRateReadSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    cancelled_by = serializers.UUIDField(
+        source="cancelled_by_id", read_only=True, allow_null=True,
+    )
 
     class Meta:
         model = SupplierMilkRate
@@ -32,6 +35,9 @@ class SupplierMilkRateReadSerializer(serializers.ModelSerializer):
             "effective_to",
             "created_by",
             "created_at",
+            "cancelled_at",
+            "cancelled_by",
+            "cancel_reason",
         ]
         read_only_fields = fields
 
@@ -74,4 +80,25 @@ class SupplierMilkRateCreateSerializer(RejectUnknownFieldsMixin, serializers.Ser
                     )
                 })
 
+        return attrs
+
+
+class SupplierMilkRateCorrectSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    milk_type = serializers.ChoiceField(choices=SupplierMilkRate.MilkType.choices)
+    effective_from = StrictDateTimeField()
+    effective_to = StrictDateTimeField()
+    rate = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal("0.01"))
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+    confirm = serializers.BooleanField(default=False)
+    # confirm=true must repeat what the preview showed
+    expected_count = serializers.IntegerField(required=False, min_value=0)
+    expected_new_total = serializers.DecimalField(
+        required=False, max_digits=16, decimal_places=2,
+    )
+
+    def validate(self, attrs):
+        if attrs["confirm"] and ("expected_count" not in attrs or "expected_new_total" not in attrs):
+            raise serializers.ValidationError(
+                "Send expected_count and expected_new_total from the preview to confirm."
+            )
         return attrs

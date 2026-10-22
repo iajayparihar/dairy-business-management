@@ -564,7 +564,8 @@ Rules every API now follows (reuse them in new code):
 - **Retries**: the same `client_ref` with the same data returns the first result; with different data it is an error (409).
 - **Delete** is soft and refused while records exist ("mark inactive instead"); it records who and when.
 - **Free text is capped** (reasons 500, notes 1000 characters).
-- **Supplier rates** follow the product-price pattern: a new rate closes the running period at its start time.
+- **Supplier rates** follow the product-price pattern: a new rate closes the running period at its start time. A wrong rate of a past period is fixed only by the **owner** through `POST /api/v1/businesses/<id>/suppliers/<id>/milk-rates/correct/` (max 31 days; first a preview with `confirm=false`, then `confirm=true` repeating `expected_count` and `expected_new_total`). The wrong rate stays visible as cancelled, and the period's milk entries are cancelled and re-entered at the right rate with their original time.
+- **Buffalo fat** must be within `MILK_FAT_MIN` and `MILK_FAT_MAX` (`.env`, default 5 and 20).
 
 
 ## Management commands

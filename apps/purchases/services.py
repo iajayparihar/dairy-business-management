@@ -719,6 +719,7 @@ def correct_milk_collection(
     reason,
     litres,
     fat=None,
+    reprice=False,
 ):
     """
     Correct litres / fat: cancel the entry and record a replacement at the
@@ -744,7 +745,8 @@ def correct_milk_collection(
         fat = old.fat  # litres-only correction keeps the recorded fat
 
     if (
-        Decimal(str(litres)) == old.litres
+        not reprice  # a rate correction re-prices an entry whose litres and fat stay as they are
+        and Decimal(str(litres)) == old.litres
         and (fat is None or Decimal(str(fat)) == old.fat)
     ):
         raise ValidationError("Nothing to correct.")

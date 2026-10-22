@@ -76,7 +76,8 @@ def create_supplier_milk_rate(
     # (no_key: the supplier row is referenced by collections and purchases).
     supplier = Supplier.objects.select_for_update(no_key=True).get(pk=supplier.pk)
     history = SupplierMilkRate.objects.filter(
-        business_id=business_id, supplier=supplier, milk_type=milk_type
+        business_id=business_id, supplier=supplier, milk_type=milk_type,
+        cancelled_at__isnull=True,
     )
     if history.filter(effective_from=effective_from).exists():
         raise ValidationError({
@@ -221,6 +222,7 @@ def resolve_supplier_milk_rate(
         business_id=business_id,
         supplier_id=supplier_id,
         milk_type=milk_type,
+        cancelled_at__isnull=True,
         effective_from__lte=collected_at,
     ).filter(
         Q(effective_to__isnull=True)

@@ -123,6 +123,16 @@ class SupplierMilkRate(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # A wrong rate is never edited: the owner's rate correction cancels it (kept for audit,
+    # ignored when pricing) and records the right period(s) as new rows.
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
+    # db_default: rows written by older code during a rolling deploy still insert.
+    cancel_reason = models.TextField(blank=True, default="", db_default="")
+
     class Meta:
         db_table = "suppliers_milk_rate"
         ordering = ["-effective_from"]
@@ -139,8 +149,16 @@ class SupplierMilkRate(models.Model):
                 ),
                 name="supplier_milk_rate_valid_period",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(cancelled_at__isnull=True, cancel_reason="")
+                    | Q(cancelled_at__isnull=False) & ~Q(cancel_reason="")
+                ),
+                name="supplier_milk_rate_cancel_needs_reason",
+            ),
             ExclusionConstraint(
                 name="exclude_overlapping_supplier_milk_rates",
+                condition=Q(cancelled_at__isnull=True),
                 expressions=[
                     ("business", RangeOperators.EQUAL),
                     ("supplier", RangeOperators.EQUAL),

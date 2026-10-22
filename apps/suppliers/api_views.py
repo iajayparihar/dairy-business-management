@@ -4,7 +4,7 @@ from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -12,8 +12,11 @@ from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
 from apps.common.pagination import StandardPagination
 from apps.suppliers.models import Supplier, SupplierMilkRate
+from apps.common.serializers import decimals_to_str
+from apps.suppliers.rate_correction import correct_supplier_milk_rate
 from apps.suppliers.services import create_supplier_milk_rate
 from apps.suppliers.api_serializers import (
+    SupplierMilkRateCorrectSerializer,
     SupplierMilkRateCreateSerializer,
     SupplierMilkRateReadSerializer,
 )
@@ -101,3 +104,35 @@ class SupplierMilkRateListCreateAPIView(
             output.data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class SupplierMilkRateCorrectAPIView(generics.GenericAPIView):
+    """
+    OWNER only. POST without `confirm` (or confirm=false) is a preview that writes nothing;
+    confirm=true must repeat the preview's expected_count and expected_new_total.
+    """
+
+    permission_classes = [IsAuthenticated, IsBusinessMember]
+    serializer_class = SupplierMilkRateCorrectSerializer
+
+    def get_permissions(self):
+        self.required_business_roles = [BusinessMembership.Role.OWNER]
+        return super().get_permissions()
+
+    def post(self, request, business_id, supplier_id):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            result = correct_supplier_milk_rate(
+                business_id=request.business.id, supplier_id=supplier_id, user=request.user,
+                milk_type=data["milk_type"], effective_from=data["effective_from"],
+                effective_to=data["effective_to"], rate=data["rate"], reason=data["reason"],
+                confirm=data["confirm"], expected_count=data.get("expected_count"),
+                expected_new_total=data.get("expected_new_total"),
+            )
+        except Supplier.DoesNotExist:
+            raise NotFound("Supplier not found.")
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+        return Response(decimals_to_str(result), status=status.HTTP_200_OK)

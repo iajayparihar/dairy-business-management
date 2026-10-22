@@ -5,7 +5,10 @@ from apps.suppliers.views import (
     SupplierDetailAPIView,
     SupplierListCreateAPIView,
 )
-from apps.suppliers.api_views import SupplierMilkRateListCreateAPIView
+from apps.suppliers.api_views import (
+    SupplierMilkRateCorrectAPIView,
+    SupplierMilkRateListCreateAPIView,
+)
 
 app_name = "suppliers"
 
@@ -26,5 +29,10 @@ urlpatterns = [
         SupplierMilkRateListCreateAPIView.as_view(),
         name="supplier-milk-rate-list-create",
     ),
+    path(
+        "businesses/<uuid:business_id>/suppliers/"
+        "<uuid:supplier_id>/milk-rates/correct/",
+        SupplierMilkRateCorrectAPIView.as_view(),
+        name="supplier-milk-rate-correct",
+    ),
 ]
-
