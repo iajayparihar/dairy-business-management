@@ -354,7 +354,7 @@ Each milestone ends with: tests green in CI, a staging build on Firebase App Dis
 | **M0 Backend foundations** | B0 phone format, B1 `/me/`, B2 app-config, B3 schema audit, B4 request id + logs, B5 staging, B6 CI. Start DLT registration for SMS now (long lead time). | 2 wk |
 | **M1 UX & design system** | 6 core flows, paper test with staff, Figma, `dairy_ui` tokens / components, Hindi label sheet signed off | 2 wk (parallel to M0) |
 | **M2 App foundation** | Monorepo, FVM, flavors, bootstrap, generated client, Dio + interceptors, secure storage, Drift + SQLCipher, logging, Sentry, analytics, CI pipeline, size check | 2 wk |
-| **M3 Auth & shell** | Password login (OTP added in M11), `/me/`, picker, capability map, router guards, app-config gate (maintenance / force update), password flows, app lock, settings, language switch | 1.5 wk |
+| **M3 Auth & shell** (started 23 Oct 2026: `../dairy_mobile`, login / reset / picker / session done; app lock and app-config gate not yet) | Password login (OTP added in M11), `/me/`, picker, capability map, router guards, app-config gate (maintenance / force update), password flows, app lock, settings, language switch | 1.5 wk |
 | **M4 Offline engine** | Outbox, sync engine, backoff, clock offset, read cache, Sync center, diagnostics, chaos tests | 2.5 wk |
 | **M5 Delivery staff** | Route runs, tasks, offline entries, extra delivery, cancel, close run | 2 wk |
 | **M6 Counter** | Milk collection (offline) + summary + cancel / correct; shop sale (offline) + summary + cancel / correct | 2.5 wk |

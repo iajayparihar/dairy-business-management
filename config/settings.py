@@ -79,6 +79,7 @@ INSTALLED_APPS += own_apps
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "apps.common.middleware.RejectNullBytesMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -87,6 +88,13 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# Native apps ignore CORS; browsers (Flutter web, admin tools) need it. Production lists
+# its origins in CORS_ALLOWED_ORIGINS; DEBUG also allows any localhost port (Flutter web dev).
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
+if DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [r"^http://(localhost|127\.0\.0\.1):\d+$"]
+CORS_EXPOSE_HEADERS = ["Retry-After"]  # the app shows the 429 countdown
 
 ROOT_URLCONF = "config.urls"
 
