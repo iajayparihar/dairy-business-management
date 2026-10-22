@@ -2,7 +2,7 @@ from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.http import Http404
-from rest_framework import generics, status
+from rest_framework import generics, serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -15,9 +15,10 @@ from apps.businesses.api_serializers import (
     StaffReadSerializer,
     StaffUpdateSerializer,
 )
-from apps.businesses.models import BusinessMembership
+from apps.businesses.models import Business, BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
 from apps.common.pagination import StandardPagination
+from apps.common.serializers import RejectUnknownFieldsMixin
 
 Role = BusinessMembership.Role
 
@@ -115,3 +116,48 @@ class StaffResetCodeAPIView(StaffAPIView):
             membership_id=membership_id,
         )
         return Response({"code": code, "expires_at": expires_at})
+
+
+class BusinessDeleteSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    confirm_name = serializers.CharField(max_length=200)
+
+
+class BusinessAPIView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "shop_manage"
+
+    def _run(self, fn, **kwargs):
+        try:
+            return fn(**kwargs)
+        except DjangoValidationError as exc:
+            raise_api_validation_error(exc)
+        except Business.DoesNotExist:
+            raise Http404
+
+
+class BusinessDetailAPIView(BusinessAPIView):
+    """DELETE = soft delete the shop. Owner only; the owner types the shop name to confirm."""
+
+    permission_classes = [IsAuthenticated, IsBusinessMember]
+    required_business_roles = [Role.OWNER]
+
+    def delete(self, request, business_id):
+        s = BusinessDeleteSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        self._run(
+            services.delete_business, business=request.business, actor=request.user,
+            confirm_name=s.validated_data["confirm_name"],
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class BusinessRestoreAPIView(BusinessAPIView):
+    """Owner brings a deleted shop back. A deleted shop is unreachable through IsBusinessMember."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, business_id):
+        business = self._run(
+            services.restore_business, business_id=business_id, actor=request.user
+        )
+        return Response({"business_id": business.pk, "business_name": business.name})

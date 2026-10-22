@@ -206,5 +206,5 @@ Reports were strong (owner / manager only, salary hidden, flat query counts, CSV
 | Phones free text, duplicates possible, usernames case-sensitive although login lookup ignores case | `+91` normalization, unique when set, case-insensitive unique username (migrations `users.0004`, `0005`). | FIXED |
 | Supplier delete | Already existed with guard; only the app screen was missing. | NOTE |
 | No `preferred_language` on the user | Not built; app keeps language on the phone for now. | OPEN |
-| `require_business_membership` does not check `Business.is_deleted` | A soft-deleted but still active shop stays reachable. `/me/` hides it. Decide whether to enforce in the permission. | OPEN |
+| `require_business_membership` did not check `Business.is_deleted` | Now enforced. Shop delete and restore are owner-only endpoints (`tests/users/test_shop_delete.py`). | FIXED |
 

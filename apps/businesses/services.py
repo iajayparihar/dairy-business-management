@@ -106,6 +106,7 @@ def require_business_membership(*, user, business_id, allowed_roles=None):
             user=user,
             is_active=True,
             business__is_active=True,
+            business__is_deleted=False,
         )
         .first()
     )
@@ -233,3 +234,32 @@ def issue_staff_reset_code(*, business, actor_user, actor_membership, membership
         raise ValidationError(blocker)
     code, expires_at = user_services.issue_code_for_user(target.user)
     return code, expires_at
+
+
+# ---------------------------------------------------------------- delete / restore shop
+# Soft delete only (nothing is destroyed). Only the owner deletes and restores; a
+# deleted shop is unreachable for everyone until restored.
+
+@transaction.atomic
+def delete_business(*, business, actor, confirm_name):
+    if (confirm_name or "").strip() != business.name:
+        raise ValidationError({"confirm_name": ["Type the shop name exactly to confirm."]})
+    # no_key: a plain FOR UPDATE on Business blocks every insert that references it
+    locked = Business.objects.select_for_update(no_key=True).get(pk=business.pk)
+    locked.soft_delete(actor)
+    return locked
+
+
+@transaction.atomic
+def restore_business(*, business_id, actor):
+    """Not an owner of this shop (or no such shop): DoesNotExist, so existence never leaks."""
+    business = Business.all_objects.select_for_update(no_key=True).get(pk=business_id)
+    is_owner = actor.is_superuser or BusinessMembership.objects.filter(
+        business=business, user=actor, role=BusinessMembership.Role.OWNER, is_active=True
+    ).exists()
+    if not is_owner:
+        raise Business.DoesNotExist
+    if not business.is_deleted:
+        raise ValidationError("This shop is not deleted.")
+    business.restore()
+    return business

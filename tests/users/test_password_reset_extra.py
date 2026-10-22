@@ -54,7 +54,7 @@ class Scenarios(TestCase):
             rates,
             {"login": "10/min", "password_forgot": "5/hour",
              "password_reset": "10/hour", "password_change": "10/hour",
-             "staff_manage": "30/hour", "reports_export": "30/min"},
+             "staff_manage": "30/hour", "shop_manage": "10/hour", "reports_export": "30/min"},
         )
 
     def test_email_failure_then_resend_works_immediately(self):

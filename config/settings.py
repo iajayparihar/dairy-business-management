@@ -150,6 +150,7 @@ REST_FRAMEWORK = {
         "password_reset": "10/hour",
         "password_change": "10/hour",
         "staff_manage": "30/hour",
+        "shop_manage": "10/hour",
         "reports_export": "30/min",
     },
 }

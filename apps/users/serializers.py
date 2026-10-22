@@ -30,6 +30,14 @@ class MeSerializer(serializers.Serializer):
             .select_related("business")
             .order_by("business__name", "business_id")
         )
+        deleted = (
+            BusinessMembership.objects.filter(
+                user=user, is_active=True, role=BusinessMembership.Role.OWNER,
+                business__is_deleted=True,
+            )
+            .select_related("business")
+            .order_by("-business__deleted_at")
+        )
         return {
             "id": user.pk,
             "username": user.username,
@@ -46,5 +54,14 @@ class MeSerializer(serializers.Serializer):
                     "bill_language": m.business.bill_language,
                 }
                 for m in memberships
+            ],
+            # shops this user owns and deleted: the app offers Restore
+            "deleted_shops": [
+                {
+                    "business_id": m.business_id,
+                    "business_name": m.business.name,
+                    "deleted_at": m.business.deleted_at,
+                }
+                for m in deleted
             ],
         }
