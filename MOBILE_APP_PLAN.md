@@ -62,6 +62,7 @@ Same working rules as CLAUDE.md: plan per step → owner approval → tests → 
 
 | # | Change | Detail |
 |---|--------|--------|
+| B0 | **Phone format now, OTP later** | Normalize and validate `User.phone_number` to E.164 `+91XXXXXXXXXX` (serializer validation + reversible data migration for existing rows, run separately from the schema migration) and a unique constraint on non-empty phones, so OTP (M11) plugs in without data cleanup. Also start **TRAI DLT** registration with an SMS provider now (weeks of lead time). |
 | B1 | `GET /api/v1/auth/me/` | User (id, name, phone, email, preferred_language) + active memberships `[{business_id, business_name, role, timezone, bill_language}]`. Own memberships only; soft-deleted / inactive hidden. |
 | B2 | `GET /api/v1/app-config/` (public, CDN-cacheable 5 min) | `min_supported_build`, `latest_build`, `maintenance {on, message_en, message_hi}`, `features {flag: bool}`, `support_phone`. Kill switch and force update for the whole fleet. |
 | B3 | OpenAPI schema audit | Every view has correct request / response schemas and enums; CI fails on schema warnings; schema diff check in CI flags breaking changes. |
@@ -74,8 +75,9 @@ Same working rules as CLAUDE.md: plan per step → owner approval → tests → 
 
 | # | Change | Why |
 |---|--------|-----|
-| B8 | **Phone + OTP login** (keep password login) | Most shop owners and delivery staff have no email. SMS in India requires **TRAI DLT** registration of sender id and templates (takes weeks — start early). Use an Indian SMS provider (MSG91 / Gupshup / Exotel); Firebase Auth phone OTP is an alternative. OTP: 6 digits, 5 min, 5 attempts, per-phone and per-IP throttles. |
-| B9 | **Self-onboarding** (owner creates business + invites staff by phone) | Millions of shops cannot be created in Django admin. *Business rule → open question Q1.* |
+| B8 | **Phone + OTP login** (keep password login) — *built in M11, before public launch; not needed for pilots* | Most shop owners and delivery staff have no email. SMS in India requires **TRAI DLT** registration of sender id and templates (takes weeks — start early). Use an Indian SMS provider (MSG91 / Gupshup / Exotel); Firebase Auth phone OTP is an alternative. OTP: 6 digits, 5 min, 5 attempts, per-phone and per-IP throttles. |
+| B9 | **Self-onboarding** (decided, Q1 / Q3) — *built in M11, before public launch; pilot shops are created by import / admin* | Flow: phone → OTP verified → create account (name) → create business (name, timezone default `Asia/Kolkata`, bill language) → caller becomes OWNER → owner invites staff by phone (staff join after their own OTP). Business is active immediately and free (Q2). Abuse guards: OTP throttles, Play Integrity, max businesses per phone (default 3), admin can suspend a business. |
+| B9a | **Pricing-ready, not pricing** (Q2) | No billing code now. Only keep the door open: all limits read from one place (`business_limits(business)`) returning "unlimited" today, so a plan / subscription can be added later without touching features. Note: Play requires Google Play Billing for in-app digital subscriptions — decide the payment route when pricing is designed. |
 | B10 | **Delta sync endpoints** | `GET .../sync/?since=<cursor>` per master list (customers, products + prices, suppliers, routes, standing orders) returning changed rows + tombstones (soft-deleted ids) with a server cursor. At scale, re-downloading full lists every refresh is the single biggest avoidable load. Needs `updated_at` + index on every synced table (customers already has `updated_at`). |
 | B11 | **Cursor pagination** for large / growing lists (deliveries, collections, sales, payments, ledgers) | Offset pagination gets slower with depth and returns duplicates / skips while rows are inserted. Keep `StandardPagination` for small lists. |
 | B12 | **Batch write endpoint for sync** (`POST .../sync/batch/`, max 50 ops, each with its own `client_ref`, per-op result) | Cuts request count 10–50× during reconnect storms (thousands of phones regaining signal at 7 am). Each op still runs through the existing service layer and lock order; one op failing never rolls back others. |
@@ -177,8 +179,11 @@ Rules:
 
 ## 7. Auth and session
 
-- Login methods: phone + OTP (B8, primary), username / password (existing, fallback).
-- After login: `/me/` → 0 businesses: onboarding (owner) or "ask your owner to invite you" (staff) · 1: enter · many: picker (remembers last).
+- **Until M11 (development and pilots):** username / phone + password only (existing `auth/token/`). No self sign-up; pilot shops are created by data import (B7) / admin. The login screen is built so an OTP tab can be added later without restructuring.
+- **From M11 (before public launch):** phone + OTP primary (decided), password fallback; self sign-up only after OTP verification.
+- New phone number after OTP → sign-up: name → "Create my shop" (owner) or "I was invited" (pending invite for this phone is joined automatically).
+- After login: `/me/` → 0 businesses: create shop or "ask your owner to invite you" · 1: enter · many: picker (remembers last).
+- Android SMS Retriever / User Consent API autofills the OTP (no SMS read permission needed).
 - Tokens: access 30 min, refresh 7 days, rotation on (existing backend).
 - **Single-flight refresh** with a mutex. The backend ends all sessions when a rotated refresh token is reused after 10 s, so two refreshes must never run in parallel. Persist the new refresh token to secure storage **before** retrying queued requests.
 - Revoked session (logout elsewhere, password change, theft detection, push "force logout") → clear tokens and read cache, **keep the encrypted outbox**, show login with a reason.
@@ -346,24 +351,24 @@ Each milestone ends with: tests green in CI, a staging build on Firebase App Dis
 
 | Milestone | Scope | Est. |
 |-----------|-------|------|
-| **M0 Backend foundations** | B1 `/me/`, B2 app-config, B3 schema audit, B4 request id + logs, B5 staging, B6 CI. Start DLT registration for SMS now (long lead time). | 2 wk |
+| **M0 Backend foundations** | B0 phone format, B1 `/me/`, B2 app-config, B3 schema audit, B4 request id + logs, B5 staging, B6 CI. Start DLT registration for SMS now (long lead time). | 2 wk |
 | **M1 UX & design system** | 6 core flows, paper test with staff, Figma, `dairy_ui` tokens / components, Hindi label sheet signed off | 2 wk (parallel to M0) |
 | **M2 App foundation** | Monorepo, FVM, flavors, bootstrap, generated client, Dio + interceptors, secure storage, Drift + SQLCipher, logging, Sentry, analytics, CI pipeline, size check | 2 wk |
-| **M3 Auth & shell** | Password login, `/me/`, picker, capability map, router guards, app-config gate (maintenance / force update), password flows, app lock, settings, language switch | 1.5 wk |
+| **M3 Auth & shell** | Password login (OTP added in M11), `/me/`, picker, capability map, router guards, app-config gate (maintenance / force update), password flows, app lock, settings, language switch | 1.5 wk |
 | **M4 Offline engine** | Outbox, sync engine, backoff, clock offset, read cache, Sync center, diagnostics, chaos tests | 2.5 wk |
 | **M5 Delivery staff** | Route runs, tasks, offline entries, extra delivery, cancel, close run | 2 wk |
 | **M6 Counter** | Milk collection (offline) + summary + cancel / correct; shop sale (offline) + summary + cancel / correct | 2.5 wk |
-| **Pilot 1** | B7 data import; 3–5 real shops on closed testing, parallel with paper for 2 weeks; fix list | 2–3 wk |
-| **M7 Backend scale pack** | B8 OTP login, B10 delta sync, B11 cursor pagination, B12 batch sync, B13 Celery + object storage, B14 push, B15 rate limits (backend, parallel with M8–M10) | 4 wk (parallel) |
+| **Pilot 1** | B7 data import; 3–5 real shops (created via import / admin) on closed testing, parallel with paper for 2 weeks; fix list | 2–3 wk |
+| **M7 Backend scale pack** | B10 delta sync, B11 cursor pagination, B12 batch sync, B13 Celery + object storage, B14 push, B15 rate limits (backend, parallel with M8–M10) | 4 wk (parallel) |
 | **M8 Customers & billing** | Customers, standing orders, routes admin, bills (generate / finalize / void / PDF / share), customer payments, statements, opening balance | 2.5 wk |
 | **M9 Suppliers, purchases, stock, expenses, salary** | Suppliers, milk rates, supplier payments, statements, purchases, stock, production, products & prices, expenses, salary (owner) | 3 wk |
-| **M10 Dashboard, reports, notifications** | Dashboard, all reports, async exports + share, push inbox, OTP login in app, delta sync + batch sync switched on | 2 wk |
-| **M11 Onboarding & compliance** | B9 self-onboarding + staff invites (after Q1 decision), B17 DPDP flows, account deletion, privacy policy, Play Integrity | 2 wk |
+| **M10 Dashboard, reports, notifications** | Dashboard, all reports, async exports + share, push inbox, delta sync + batch sync switched on | 2 wk |
+| **M11 OTP login, self sign-up & compliance** | B8 OTP backend + app OTP tab with SMS autofill, B9 self sign-up (OTP → account → shop → invite staff), B9a limits hook, B17 DPDP flows, account deletion, privacy policy, Play Integrity | 3 wk |
 | **M12 Hardening** | Performance budgets, accessibility, tablet layouts, device lab, load test 10k devices, security review + pentest, translation review | 2 wk |
-| **Pilot 2** | 20–50 shops, full app, staged by region | 3 wk |
+| **Pilot 2** | 20–50 shops (created via import / admin), full app, staged by region | 3 wk |
 | **M13 Android GA** | Production (S1) deploy, Play staged rollout, monitoring, on-call, runbooks | 1.5 wk |
 
-**Android GA ≈ 32–36 weeks with 1 Flutter developer + 1 backend developer** (incl. ~20% buffer). A usable field app (deliveries + collection + sales) reaches pilot shops at about **week 14**.
+**Android GA ≈ 33–37 weeks with 1 Flutter developer + 1 backend developer** (incl. ~20% buffer). A usable field app (deliveries + collection + sales) reaches pilot shops at about **week 14**.
 
 ### Phase B — iOS (starts after Android GA is stable for 4 weeks)
 
@@ -405,7 +410,7 @@ For a nationwide product: at least **2 Flutter, 2 backend, 1 QA, 1 designer (par
 | OEM battery killers stop background sync | Foreground-triggered sync, "Sync now", last-synced indicator |
 | Reconnect storm at 7 am overloads servers | Batch sync (B12), jittered backoff, rate limits (B15), load test |
 | Wrong phone clock | Server time offset + warning |
-| SMS DLT approval delays OTP login | Start registration in M0; password login as fallback |
+| SMS DLT approval delays the public launch (OTP is required for sign-up) | Apply in M0; pilots use password login and don't depend on it |
 | Staff resist the app | Paper test in M1, Hindi-first UI, parallel paper run, ≤ 3 taps per delivery |
 | API change breaks old installs | Schema contract check, additive-only v1, force update via app-config |
 | Single DB limit at growth | Staged S1–S4 plan with measured triggers; tenant-scoped schema ready to shard |
@@ -431,9 +436,9 @@ For a nationwide product: at least **2 Flutter, 2 backend, 1 QA, 1 designer (par
 
 | # | Question | Recommended default |
 |---|----------|---------------------|
-| Q1 | Self-onboarding: can any shop owner sign up from the app, or do we approve / create each business? | Self sign-up with phone OTP, business active immediately |
-| Q2 | Pricing: free, subscription, or per-shop plan? (affects onboarding, limits, Play billing rules) | Decide before M11; free during pilots |
-| Q3 | Phone OTP as the main login? | Yes; keep password as fallback |
+| Q1 | ✅ **Decided (2026-10-22):** shop owners sign up themselves from the app. | — |
+| Q2 | ✅ **Decided (2026-10-22):** free at launch; pricing decided later. | — |
+| Q3 | ✅ **Decided (2026-10-22):** phone OTP is the main login; sign-up happens only after the mobile number is verified by OTP. OTP arrives in M11 (before public launch); password login until then. | — |
 | Q4 | Shared counter tablet with several staff, or personal phones? | Personal phones; shared-device mode later |
 | Q5 | Can the delivery boy collect cash at the door? | Not in v1 (ROADMAP open question) |
 | Q6 | Languages after Hindi / English, and in what order? | Marathi, Gujarati, Punjabi first (dairy belt) |
