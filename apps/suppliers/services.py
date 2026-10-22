@@ -72,6 +72,35 @@ def create_supplier_milk_rate(
     if rate < 0:
         raise ValidationError("Rate cannot be negative.")
 
+    # Lock the supplier so two rate changes for it cannot interleave
+    # (no_key: the supplier row is referenced by collections and purchases).
+    supplier = Supplier.objects.select_for_update(no_key=True).get(pk=supplier.pk)
+    history = SupplierMilkRate.objects.filter(
+        business_id=business_id, supplier=supplier, milk_type=milk_type
+    )
+    if history.filter(effective_from=effective_from).exists():
+        raise ValidationError({
+            "effective_from": "A rate already starts at this timestamp."
+        })
+    # Same pattern as product prices: the period running at effective_from ends
+    # there, and the new one runs until the next scheduled rate (or stays open).
+    current = (
+        history.filter(effective_from__lt=effective_from)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gt=effective_from))
+        .order_by("-effective_from")
+        .first()
+    )
+    next_rate = (
+        history.filter(effective_from__gt=effective_from)
+        .order_by("effective_from")
+        .first()
+    )
+    if current is not None:
+        current.effective_to = effective_from
+        current.save(update_fields=["effective_to"])
+    if effective_to is None and next_rate is not None:
+        effective_to = next_rate.effective_from
+
     return SupplierMilkRate.objects.create(
         business_id=business_id,
         supplier=supplier,
@@ -81,9 +110,6 @@ def create_supplier_milk_rate(
         effective_to=effective_to,
         created_by=user,
     )
-    
-
-
 
 
 PRICING_FAT = "FAT"

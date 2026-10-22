@@ -1,6 +1,7 @@
 
 from rest_framework import serializers
 from decimal import Decimal
+from apps.common.serializers import RejectUnknownFieldsMixin, StrictDateTimeField
 from apps.suppliers.models import SupplierMilkRate
 
 
@@ -35,7 +36,7 @@ class SupplierMilkRateReadSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class SupplierMilkRateCreateSerializer(serializers.Serializer):
+class SupplierMilkRateCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     milk_type = serializers.ChoiceField(
         choices=SupplierMilkRate.MilkType.choices,
     )
@@ -44,8 +45,8 @@ class SupplierMilkRateCreateSerializer(serializers.Serializer):
         decimal_places=2,
         min_value=Decimal("0.001"),
     )
-    effective_from = serializers.DateTimeField()
-    effective_to = serializers.DateTimeField(
+    effective_from = StrictDateTimeField()
+    effective_to = StrictDateTimeField(
         required=False,
         allow_null=True,
         default=None,

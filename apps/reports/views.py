@@ -37,6 +37,7 @@ class MilkBalanceView(ReportView):
     def get(self, request, business_id):
         params = request.query_params
         try:
+            reject_unknown(params, {"date", "from", "to"})
             day, start, end = (_date_param(params, k) for k in ("date", "from", "to"))
             if day and (start or end):
                 raise DjangoValidationError({"date": "Use either date or from and to."})
@@ -64,10 +65,11 @@ class ClosingStockView(ReportView):
     def get(self, request, business_id):
         params = request.query_params
         try:
+            reject_unknown(params, {"month", "compare"})
             raw = params.get("month", "")
             try:
                 year, month = (int(x) for x in raw.split("-"))
-                assert 1 <= month <= 12 and 1 <= year <= 9998 and len(raw) == 7
+                assert 1 <= month <= 12 and 2000 <= year <= 2100 and len(raw) == 7
             except (ValueError, AssertionError):
                 raise DjangoValidationError({"month": "Use YYYY-MM format."})
             compare = params.get("compare", "true").lower() != "false"

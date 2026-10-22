@@ -31,6 +31,9 @@ def _date_param(params, name):
         parsed = None
     if parsed is None:
         raise ValidationError({name: "Use YYYY-MM-DD format."})
+    # Far-off dates overflow day arithmetic (9999-12-31 + 1 day) and crash with a 500.
+    if not 2000 <= parsed.year <= 2100:
+        raise ValidationError({name: "The year must be between 2000 and 2100."})
     return parsed
 
 

@@ -27,6 +27,18 @@ from apps.sales.services import _lock_business
 
 K = SalaryAccrual.Kind
 CLOCK_SKEW = timedelta(minutes=5)
+def _phone(value):
+    """Same phone rules as customers and suppliers (digits, optional +)."""
+    from rest_framework import serializers as drf
+
+    from apps.common.serializers import clean_phone
+
+    try:
+        return clean_phone(value)
+    except drf.ValidationError as exc:
+        raise ValidationError({"phone": exc.detail[0]})
+
+
 TEXT_LIMITS = {"name": 200, "phone": 20, "designation": 100}
 
 
@@ -73,9 +85,11 @@ def create_employee(*, business_id, user, name, monthly_salary, joined_on,
                     phone="", designation=""):
     _owner(user, business_id)
     name = _text("name", name, required=True)
-    phone, designation = _text("phone", phone), _text("designation", designation)
+    phone, designation = _phone(_text("phone", phone)), _text("designation", designation)
     salary = to_money(monthly_salary, "monthly_salary")
     joined_on = _date("joined_on", joined_on)
+    if joined_on > timezone.localdate() + timedelta(days=366):
+        raise ValidationError({"joined_on": "The joining date is too far in the future."})
     business = _lock_business(business_id)
     try:
         with transaction.atomic():
@@ -103,9 +117,10 @@ def update_employee(*, business_id, employee_id, user, **changes):
     emp = _lock_employee(business, employee_id)
     if "name" in changes:
         emp.name = _text("name", changes["name"], required=True)
-    for field in ("phone", "designation"):
-        if field in changes:
-            setattr(emp, field, _text(field, changes[field]))
+    if "phone" in changes:
+        emp.phone = _phone(_text("phone", changes["phone"]))
+    if "designation" in changes:
+        emp.designation = _text("designation", changes["designation"])
     if "monthly_salary" in changes:
         emp.monthly_salary = to_money(changes["monthly_salary"], "monthly_salary")
     if "is_active" in changes:

@@ -1,5 +1,6 @@
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +11,7 @@ from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
 from apps.common.querysets import scope_to_business
 from apps.common.pagination import StandardPagination
+from apps.products.guards import category_has_products, product_has_records
 from apps.products.models import Product, ProductCategory, ProductPrice
 from apps.products.serializers import (
     ProductCategorySerializer,
@@ -42,17 +44,45 @@ class BusinessScopedAPIViewMixin:
         return super().get_permissions()
 
 
+def _bool_param(params, name):
+    raw = params.get(name, "").lower()
+    if raw in ("true", "false"):
+        return raw == "true"
+    if raw:
+        raise serializers.ValidationError({name: "Use true or false."})
+    return None
+
+
 class ProductCategoryListCreateAPIView(
     BusinessScopedAPIViewMixin,
     generics.ListCreateAPIView,
 ):
     serializer_class = ProductCategorySerializer
+    pagination_class = StandardPagination
 
     def get_queryset(self):
-        return scope_to_business(
-            ProductCategory.objects.all(),
-            self.request.business,
-        )
+        rows = scope_to_business(
+            ProductCategory.objects.all(), self.request.business
+        ).order_by("name", "id")
+        active = _bool_param(self.request.query_params, "is_active")
+        return rows if active is None else rows.filter(is_active=active)
+
+
+class ProductCategoryDetailAPIView(
+    BusinessScopedAPIViewMixin,
+    generics.RetrieveUpdateDestroyAPIView,
+):
+    serializer_class = ProductCategorySerializer
+
+    def get_queryset(self):
+        return scope_to_business(ProductCategory.objects.all(), self.request.business)
+
+    def perform_destroy(self, instance):
+        if category_has_products(instance):
+            raise serializers.ValidationError({
+                "detail": "This category has products. Move them or mark it inactive."
+            })
+        instance.soft_delete(self.request.user)
 
 
 class ProductListCreateAPIView(
@@ -60,12 +90,32 @@ class ProductListCreateAPIView(
     generics.ListCreateAPIView,
 ):
     serializer_class = ProductSerializer
+    pagination_class = StandardPagination
 
     def get_queryset(self):
-        return scope_to_business(
-            Product.objects.select_related("category"),
-            self.request.business,
-        )
+        params = self.request.query_params
+        rows = scope_to_business(
+            Product.objects.select_related("category"), self.request.business
+        ).order_by("name", "sku")
+        for name, field in (("is_active", "is_active"), ("track_stock", "track_stock")):
+            flag = _bool_param(params, name)
+            if flag is not None:
+                rows = rows.filter(**{field: flag})
+        unit = params.get("unit", "")
+        if unit:
+            if unit not in Product.Unit.values:
+                raise serializers.ValidationError({"unit": "Unknown unit."})
+            rows = rows.filter(unit=unit)
+        category = params.get("category", "")
+        if category:
+            try:
+                rows = rows.filter(category_id=serializers.UUIDField().run_validation(category))
+            except serializers.ValidationError:
+                raise serializers.ValidationError({"category": "Not a valid id."})
+        term = params.get("search", "").strip()
+        if term:
+            rows = rows.filter(Q(name__icontains=term) | Q(sku__icontains=term))
+        return rows
 
 
 class ProductDetailAPIView(
@@ -80,6 +130,16 @@ class ProductDetailAPIView(
             Product.objects.select_related("category"),
             self.request.business,
         )
+
+    def perform_destroy(self, instance):
+        if product_has_records(instance):
+            raise serializers.ValidationError({
+                "detail": (
+                    "This product has sales, stock, purchases or deliveries and "
+                    "cannot be deleted. Mark it inactive instead."
+                )
+            })
+        instance.soft_delete(self.request.user)
 
 
 class ProductPriceListCreateAPIView(BusinessScopedAPIViewMixin, APIView):

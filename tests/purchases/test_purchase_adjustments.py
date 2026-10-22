@@ -86,9 +86,12 @@ class ReturnTests(AdjustmentBase):
         self.assertEqual(self.stock(), Decimal("10.000"))
 
     def test_duplicate_client_ref_rejected(self):
-        self.ret("1.000", client_ref="req-1")
-        with self.assertRaises(ValidationError):
-            self.ret("1.000", client_ref="req-1")
+        first = self.ret("1.000", client_ref="req-1")
+        again = self.ret("1.000", client_ref="req-1")  # lost response, client retries
+        self.assertEqual(again.pk, first.pk)
+        self.assertTrue(again.replayed)
+        with self.assertRaises(ValidationError):  # same ref, different data
+            self.ret("2.000", client_ref="req-1")
         self.assertEqual(self.stock(), Decimal("9.000"))
 
     def test_untracked_product_adjusts_payable_only(self):
@@ -315,8 +318,8 @@ class AdjustmentAPITests(AdjustmentBase):
         self.assertEqual(res.data["amount"], "-150.00")
 
         res = client.get(self.url("purchase-adjustments"))
-        self.assertEqual(res.data["original_total"], Decimal("500.00"))
-        self.assertEqual(res.data["net_amount"], Decimal("350.00"))
+        self.assertEqual(res.data["original_total"], "500.00")
+        self.assertEqual(res.data["net_amount"], "350.00")
         self.assertEqual(len(res.data["adjustments"]), 1)
 
     def test_correction_endpoint(self):

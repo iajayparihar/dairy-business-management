@@ -130,10 +130,10 @@ class PurchaseLifecycleServiceTests(PurchaseTestBase):
 
     def test_cancelled_draft_cannot_be_received_cancelled_or_edited(self):
         purchase = self.draft()
-        cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner)
+        cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner, reason="test")
         for call in (
             lambda: receive_purchase(purchase_id=purchase.pk, user=self.owner),
-            lambda: cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner),
+            lambda: cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner, reason="test"),
             lambda: update_draft_purchase(
                 purchase_id=purchase.pk, user=self.owner, notes="x"
             ),
@@ -145,7 +145,7 @@ class PurchaseLifecycleServiceTests(PurchaseTestBase):
     def test_received_purchase_cannot_be_cancelled_or_edited(self):
         purchase = self.received()
         with self.assertRaises(ValidationError):
-            cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner)
+            cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner, reason="test")
         with self.assertRaises(ValidationError):
             update_draft_purchase(
                 purchase_id=purchase.pk, user=self.owner, notes="x"
@@ -341,7 +341,7 @@ class PurchaseAPITests(PurchaseTestBase):
         for call in (
             lambda: outsider.get(self.url("purchase-detail", self.other_business, pk)),
             lambda: outsider.post(self.url("purchase-receive", self.other_business, pk)),
-            lambda: outsider.post(self.url("purchase-cancel", self.other_business, pk)),
+            lambda: outsider.post(self.url("purchase-cancel", self.other_business, pk), {"reason": "x"}, format="json"),
             lambda: outsider.patch(self.url("purchase-detail", self.other_business, pk),
                                    {"notes": "x"}, format="json"),
         ):
@@ -507,7 +507,7 @@ class SupplierPaymentIntegrationTests(PurchaseTestBase):
 
     def test_cancelled_draft_never_affects_balance_or_statement(self):
         purchase = self.draft()
-        cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner)
+        cancel_draft_purchase(purchase_id=purchase.pk, user=self.owner, reason="test")
         self.assertEqual(self.balance()["total_purchases"], Decimal("0.00"))
         stmt = get_supplier_account_statement(
             business_id=self.business.pk, supplier_id=self.supplier.pk

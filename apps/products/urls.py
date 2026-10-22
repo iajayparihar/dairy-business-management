@@ -2,6 +2,7 @@
 from django.urls import path
 
 from apps.products.views import (
+    ProductCategoryDetailAPIView,
     ProductCategoryListCreateAPIView,
     ProductDetailAPIView,
     ProductListCreateAPIView,
@@ -15,6 +16,11 @@ urlpatterns = [
         "businesses/<uuid:business_id>/categories/",
         ProductCategoryListCreateAPIView.as_view(),
         name="category-list-create",
+    ),
+    path(
+        "businesses/<uuid:business_id>/categories/<uuid:pk>/",
+        ProductCategoryDetailAPIView.as_view(),
+        name="category-detail",
     ),
     path(
         "businesses/<uuid:business_id>/products/",

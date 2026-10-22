@@ -4,17 +4,18 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.common.serializers import RejectUnknownFieldsMixin, StrictDateTimeField
 from apps.deliveries.models import Delivery
 
 
-class DeliveryCreateSerializer(serializers.Serializer):
+class DeliveryCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     """Validate input required to create a delivery."""
 
     customer_id = serializers.UUIDField()
     product_id = serializers.UUIDField()
 
     # Omit to use the server's current time.
-    delivered_at = serializers.DateTimeField(required=False)
+    delivered_at = StrictDateTimeField(required=False)
 
     shift = serializers.ChoiceField(
         choices=Delivery.Shift.choices,
@@ -117,11 +118,11 @@ class DeliveryFilterSerializer(serializers.Serializer):
     has_shortfall = serializers.BooleanField(required=False)
 
 
-class DeliveryCancelSerializer(serializers.Serializer):
+class DeliveryCancelSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     reason = serializers.CharField(max_length=500)
 
 
-class DeliveryCorrectSerializer(serializers.Serializer):
+class DeliveryCorrectSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     """Fields that may be corrected; omitted fields stay unchanged."""
 
     reason = serializers.CharField(max_length=500)
@@ -161,7 +162,7 @@ class DeliveryDetailSerializer(DeliveryReadSerializer):
             {
                 "id": m.pk,
                 "movement_type": m.movement_type,
-                "quantity": m.quantity,
+                "quantity": str(m.quantity),
                 "occurred_at": m.occurred_at,
                 "reversal_of": m.reversal_of_id,
                 "reason": m.reason,

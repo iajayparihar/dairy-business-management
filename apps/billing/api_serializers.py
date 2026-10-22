@@ -2,9 +2,19 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from apps.common.dates import sane_date
+
 from apps.billing.models import CustomerBill, CustomerPayment
 from apps.billing.documents import money
 from apps.purchases.api_serializers import TimezoneAwareDateTimeField
+
+
+
+def _sane(value):
+    try:
+        sane_date(value)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc))
 
 
 class StrictSerializer(serializers.Serializer):
@@ -38,7 +48,7 @@ class PaymentCreateSerializer(StrictSerializer):
     reference_number = serializers.CharField(
         max_length=100, required=False, allow_blank=True, default="",
     )
-    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    notes = serializers.CharField(required=False, allow_blank=True, default="", max_length=1000)
     client_ref = serializers.CharField(
         max_length=64, required=False, allow_blank=True,
     )
@@ -47,7 +57,7 @@ class PaymentCreateSerializer(StrictSerializer):
 
 class PaymentReverseSerializer(StrictSerializer):
     amount = _amount(min_value=Decimal("0.01"), required=False)
-    reason = serializers.CharField(trim_whitespace=True)
+    reason = serializers.CharField(trim_whitespace=True, max_length=500)
     client_ref = serializers.CharField(
         max_length=64, required=False, allow_blank=True,
     )
@@ -59,8 +69,8 @@ class PaymentAllocateSerializer(StrictSerializer):
 
 
 class PeriodSerializer(StrictSerializer):
-    period_start = serializers.DateField()
-    period_end = serializers.DateField()
+    period_start = serializers.DateField(validators=[_sane])
+    period_end = serializers.DateField(validators=[_sane])
 
 
 class BulkGenerateSerializer(PeriodSerializer):
@@ -74,13 +84,13 @@ class FinalizeSerializer(StrictSerializer):
 
 
 class VoidSerializer(StrictSerializer):
-    reason = serializers.CharField(trim_whitespace=True)
+    reason = serializers.CharField(trim_whitespace=True, max_length=500)
     create_replacement = serializers.BooleanField(required=False)
 
 
 class OpeningBalanceSerializer(StrictSerializer):
     amount = _amount()
-    as_of_date = serializers.DateField()
+    as_of_date = serializers.DateField(validators=[_sane])
     client_ref = serializers.CharField(
         max_length=64, required=False, allow_blank=True,
     )

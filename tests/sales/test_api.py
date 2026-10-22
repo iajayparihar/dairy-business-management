@@ -164,7 +164,7 @@ class ReadAndManageApiTests(ApiBase):
 class CustomerLookupApiTests(ApiBase):
     def test_quick_customer_and_search(self):
         r = self.api().post(self.url("quick-customer"),
-                            {"name": "Mohan Lal", "phone": "98765"}, format="json")
+                            {"name": "Mohan Lal", "phone": "9876512345"}, format="json")
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(r.data["customer_code"], "CUST-1")
         bad = self.api().post(self.url("quick-customer"),

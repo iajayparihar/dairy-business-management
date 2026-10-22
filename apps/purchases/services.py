@@ -1,3 +1,4 @@
+from datetime import timedelta
 
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -90,6 +91,12 @@ def _calculate_total(purchase):
     purchase.save(update_fields=["total_amount", "updated_at"])
 
 
+def _not_in_future(moment):
+    """Business events are never dated ahead (5 minutes of phone-clock skew allowed)."""
+    if moment > timezone.now() + timedelta(minutes=5):
+        raise ValidationError({"purchased_at": "The date cannot be in the future."})
+
+
 @transaction.atomic
 def create_purchase(
     *,
@@ -108,6 +115,8 @@ def create_purchase(
         raise ValidationError(
             {"purchased_at": "Purchase date and time must include a timezone."}
         )
+
+    _not_in_future(purchased_at)
 
     business = Business.objects.get(pk=business_id)
     supplier = Supplier.objects.get(
@@ -178,6 +187,7 @@ def update_draft_purchase(*, purchase_id, user, supplier_id=None,
             raise ValidationError(
                 {"purchased_at": "Purchase date and time must include a timezone."}
             )
+        _not_in_future(purchased_at)
         purchase.purchased_at = purchased_at
 
     if notes is not None:
@@ -274,6 +284,8 @@ def cancel_draft_purchase(*, purchase_id, user, reason="", business_id=None):
     purchase.cancelled_at = timezone.now()
     purchase.cancelled_by = user
     purchase.cancel_reason = (reason or "").strip()
+    if not purchase.cancel_reason:
+        raise ValidationError({"reason": "A reason is required."})
     purchase.save(
         update_fields=[
             "status", "cancelled_at", "cancelled_by",
@@ -354,6 +366,12 @@ def create_milk_collection(
     if not timezone.is_aware(collected_at):
         raise ValidationError({
             "collected_at": "Collection time must include a timezone."
+        })
+
+    # Same rule as expenses: never in the future (5 minutes of phone-clock skew allowed).
+    if collected_at > timezone.now() + timedelta(minutes=5):
+        raise ValidationError({
+            "collected_at": "Collection time cannot be in the future."
         })
 
     if milk_type not in MilkCollection.MilkType.values:

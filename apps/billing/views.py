@@ -280,6 +280,10 @@ class BillListView(BillingView):
             ):
                 if params.get(key):
                     bills = bills.filter(**{field: params[key]})
+            for key, model_field in (("status", "status"), ("bill_type", "bill_type")):
+                allowed = CustomerBill._meta.get_field(model_field).choices
+                if params.get(key) and params[key] not in {c[0] for c in allowed}:
+                    raise ValueError(key)
             if params.get("start_date"):
                 bills = bills.filter(period_end__gte=params["start_date"])
             if params.get("end_date"):

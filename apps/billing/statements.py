@@ -1,4 +1,5 @@
 """Customer balance and account statement (positive = the customer owes)."""
+from apps.common.dates import parse_iso_date
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -74,7 +75,7 @@ def get_customer_balance(*, business_id, customer_id):
 def _parse_day(value, name):
     if isinstance(value, str):
         try:
-            return date.fromisoformat(value)
+            return parse_iso_date(value)
         except ValueError:
             raise ValidationError({name: "Use YYYY-MM-DD format."})
     return value

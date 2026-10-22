@@ -1,3 +1,5 @@
+import re
+
 
 from django.db.models import Q
 from rest_framework import generics
@@ -7,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from apps.billing.guards import customer_has_records
 from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
+from apps.common.pagination import StandardPagination
 from apps.common.querysets import scope_to_business
 from apps.customers.models import Customer
 from apps.customers.serializers import CustomerSerializer
@@ -32,20 +35,39 @@ class CustomerListCreateAPIView(
     generics.ListCreateAPIView,
 ):
     serializer_class = CustomerSerializer
+    pagination_class = StandardPagination
 
     def get_queryset(self):
+        params = self.request.query_params
+        # unique code as tie-break: pages must not skip or repeat equal names
         customers = scope_to_business(
-            Customer.objects.all(),
-            self.request.business,
-        )
-        term = self.request.query_params.get("search", "").strip()
+            Customer.objects.all(), self.request.business
+        ).order_by("name", "customer_code")
+        active = params.get("is_active", "").lower()
+        if active in ("true", "false"):
+            customers = customers.filter(is_active=active == "true")
+        elif active:
+            raise ValidationError({"is_active": "Use true or false."})
+        kind = params.get("customer_type", "")
+        if kind:
+            if kind not in Customer.CustomerType.values:
+                raise ValidationError({"customer_type": "Unknown customer type."})
+            customers = customers.filter(customer_type=kind)
+        term = params.get("search", "").strip()
         if term:
-            # ponytail: counter lookup, capped at 20 matches, no paging.
+            # phones are stored without spaces / dashes, so search them the same way
+            digits = re.sub(r"[\s\-().]", "", term)
             customers = customers.filter(
-                Q(name__icontains=term) | Q(phone__icontains=term)
-                | Q(customer_code__icontains=term)
-            )[:20]
+                Q(name__icontains=term) | Q(customer_code__icontains=term)
+                | Q(phone__icontains=digits)
+            )[:20]  # counter lookup: top 20 matches as a plain list (see paginate_queryset)
         return customers
+
+    def paginate_queryset(self, queryset):
+        # The counter's type-ahead search keeps its documented shape: a bare list.
+        if self.request.query_params.get("search", "").strip():
+            return None
+        return super().paginate_queryset(queryset)
 
 
 class CustomerDetailAPIView(
@@ -69,4 +91,4 @@ class CustomerDetailAPIView(
                     "cannot be deleted. Mark the customer inactive instead."
                 )
             })
-        instance.delete()
+        instance.soft_delete(self.request.user)

@@ -5,6 +5,7 @@ Read-only. It never posts anything; POST .../payments/ stays the only
 writer and re-checks every cap against live data (an overpayment simply
 becomes supplier advance), so a stale suggestion cannot corrupt balances.
 """
+from apps.common.dates import parse_iso_date
 from datetime import date, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -32,7 +33,7 @@ def _parse_date(value, field):
     if isinstance(value, date):
         return value
     try:
-        return date.fromisoformat(value)
+        return parse_iso_date(value)
     except (TypeError, ValueError):
         raise ValidationError({field: "Use YYYY-MM-DD format."})
 

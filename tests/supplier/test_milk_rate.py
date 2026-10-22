@@ -184,11 +184,12 @@ class SupplierMilkRateServiceTests(TestCase):
 
         self.create_rate(effective_to=end)
 
+        # the service closes the running period; the constraint still guards raw writes
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
-                self.create_rate(
-                    rate=Decimal("16.00"),
-                    effective_from=self.start + timedelta(hours=1),
+                SupplierMilkRate.objects.create(
+                    business=self.business, supplier=self.supplier, milk_type="COW",
+                    rate=Decimal("16.00"), effective_from=self.start + timedelta(hours=1),
                 )
 
     def test_calculate_milk_amount_example(self):

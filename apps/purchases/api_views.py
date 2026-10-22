@@ -530,7 +530,10 @@ class PurchaseAdjustmentAPIView(PurchaseViewMixin, APIView):
         )
         return Response(
             PurchaseAdjustmentReadSerializer(adjustment).data,
-            status=status.HTTP_201_CREATED,
+            status=(
+                status.HTTP_200_OK if getattr(adjustment, "replayed", False)
+                else status.HTTP_201_CREATED
+            ),
         )
 
 
@@ -553,8 +556,8 @@ class PurchaseAdjustmentListAPIView(PurchaseViewMixin, APIView):
             raise NotFound("Not found.") from exc
         adjustments = purchase.adjustments.prefetch_related("lines")
         return Response({
-            "original_total": purchase.total_amount,
-            "net_amount": purchase.net_amount,
+            "original_total": str(purchase.total_amount),
+            "net_amount": str(purchase.net_amount),
             "adjustments": PurchaseAdjustmentReadSerializer(
                 adjustments, many=True
             ).data,

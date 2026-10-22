@@ -548,6 +548,25 @@ Use a Gmail **app password** (Google account, 2-Step Verification on), not the l
 - Throttling by IP does not stop a distributed attacker; the OTP limits in PostgreSQL are the real guard.
 - Auth tests: `python manage.py test tests.users` (about 150 tests; `tests/users/test_auth_qa.py` is the QA sweep). With `NUM_PROXIES` above 0 in `.env`, the two tests in `test_throttle_spoofing.py` fail by design.
 
+## QA log and API rules
+
+`QA_LOG.md` lists, module by module, every bug the QA sweeps found, how it was fixed and what is still open for a decision. The sweeps are the `test_*_qa.py` files next to each module's tests; run one module with `python manage.py test tests.<area>`.
+
+Rules every API now follows (reuse them in new code):
+
+- **Unknown request fields are a 400** (`RejectUnknownFieldsMixin` in `apps/common/serializers.py`); a typo is never silently dropped.
+- **Codes** for customers and suppliers are `A-Z 0-9 _ -`, upper-case, unique per business (soft-deleted rows keep their code) and **frozen** once the party has records, because the code is part of bill, payment and milk-can numbers.
+- **Phones** are digits with an optional `+` (7-15 digits); spaces and dashes are removed on save.
+- **Dates** must be between 2000 and 2100 (`apps/common/dates.py`); timestamps must carry an offset (`StrictDateTimeField`); business events are never dated in the future (5 minutes of phone-clock skew allowed).
+- **Money and quantities are JSON strings**, never floats (`decimals_to_str` or serializer `DecimalField`).
+- **Lists are paginated** with a stable order (a unique tie-break); filters with a bad value are a 400.
+- **Duplicates are a 400, never a 500**; parallel creates of the same code, number or `client_ref` have exactly one winner.
+- **Retries**: the same `client_ref` with the same data returns the first result; with different data it is an error (409).
+- **Delete** is soft and refused while records exist ("mark inactive instead"); it records who and when.
+- **Free text is capped** (reasons 500, notes 1000 characters).
+- **Supplier rates** follow the product-price pattern: a new rate closes the running period at its start time.
+
+
 ## Management commands
 
 | Command | Purpose |

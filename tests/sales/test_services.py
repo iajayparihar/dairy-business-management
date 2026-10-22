@@ -317,9 +317,9 @@ class CancelCorrectTests(SalesBase):
 class QuickCustomerAndSummaryTests(SalesBase):
     def test_quick_customer_codes(self):
         a = quick_create_customer(business_id=self.business.pk,
-                                  user=self.staff, name="Mohan", phone="99")
+                                  user=self.staff, name="Mohan", phone="9999999999")
         b = quick_create_customer(business_id=self.business.pk,
-                                  user=self.staff, name="Geeta", phone="98")
+                                  user=self.staff, name="Geeta", phone="9898989898")
         self.assertEqual((a.customer_code, b.customer_code),
                          ("CUST-1", "CUST-2"))
         with self.assertRaises(ValidationError):

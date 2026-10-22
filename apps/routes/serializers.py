@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from apps.common.serializers import RejectUnknownFieldsMixin
+
 from apps.routes.models import Route, RouteRun, RouteVisit, StandingOrder
 
 SHIFTS = [("MORNING", "Morning"), ("EVENING", "Evening")]
@@ -16,13 +18,18 @@ class RouteSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class RouteCreateSerializer(serializers.Serializer):
+class RouteCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     name = serializers.CharField(max_length=100)
     assigned_to = serializers.UUIDField(required=False, allow_null=True)
 
 
-class RouteCustomersSerializer(serializers.Serializer):
-    customers = serializers.ListField(child=serializers.UUIDField())
+class RouteCustomersSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    customers = serializers.ListField(child=serializers.UUIDField(), max_length=2000)
+
+    def validate_customers(self, value):
+        if len(set(value)) != len(value):
+            raise serializers.ValidationError("A customer can appear only once on a route.")
+        return value
 
 
 class StandingOrderSerializer(serializers.ModelSerializer):
@@ -35,14 +42,14 @@ class StandingOrderSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class StandingOrderInputSerializer(serializers.Serializer):
+class StandingOrderInputSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     customer_id = serializers.UUIDField()
     product_id = serializers.UUIDField()
     shift = serializers.ChoiceField(choices=SHIFTS, default="MORNING")
     quantity = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal("0.001"))
 
 
-class RunStartSerializer(serializers.Serializer):
+class RunStartSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     route_id = serializers.UUIDField()
     run_date = serializers.DateField(required=False)
     shift = serializers.ChoiceField(choices=SHIFTS, default="MORNING")
@@ -74,20 +81,20 @@ class VisitSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class EntryItemSerializer(serializers.Serializer):
+class EntryItemSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     product_id = serializers.UUIDField()
     quantity = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal("0.001"))
     unit_price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.00"), required=False)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
 
 
-class EntrySerializer(serializers.Serializer):
+class EntrySerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     customer_id = serializers.UUIDField()
     outcome = serializers.ChoiceField(choices=RouteVisit.Status.choices)
-    items = EntryItemSerializer(many=True, required=False)
+    items = EntryItemSerializer(many=True, required=False, max_length=50)
     reason = serializers.CharField(required=False, allow_blank=True, default="")
     client_ref = serializers.CharField(max_length=40, required=False)
 
 
-class ReopenSerializer(serializers.Serializer):
+class ReopenSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     reason = serializers.CharField(max_length=500)

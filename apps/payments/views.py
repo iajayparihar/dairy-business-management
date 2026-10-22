@@ -14,7 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.businesses.permissions import IsBusinessMember
+from apps.common.dates import parse_iso_date
 from apps.common.pagination import StandardPagination
+from apps.common.serializers import decimals_to_str
 from apps.suppliers.models import Supplier
 from apps.payments.statements import get_supplier_account_statement
 
@@ -96,7 +98,7 @@ class SupplierAccountStatementAPIView(OwnerManagerMixin, APIView):
             "page_size": paginator.get_page_size(request),
             "num_pages": paginator.page.paginator.num_pages,
         }
-        return Response(statement, status=status.HTTP_200_OK)
+        return Response(decimals_to_str(statement), status=status.HTTP_200_OK)
 
 
 class SupplierAccountStatementPrintAPIView(OwnerManagerMixin, APIView):
@@ -116,8 +118,8 @@ class SupplierAccountStatementPrintAPIView(OwnerManagerMixin, APIView):
         today = timezone.now().astimezone(tz).date()
 
         try:
-            end = date.fromisoformat(params.get("end_date") or today.isoformat())
-            start = date.fromisoformat(
+            end = parse_iso_date(params.get("end_date") or today.isoformat())
+            start = parse_iso_date(
                 params.get("start_date")
                 or (end - timedelta(days=self.DEFAULT_DAYS - 1)).isoformat()
             )
@@ -250,7 +252,7 @@ class OwnerManagerPaymentView(OwnerManagerMixin, APIView):
             .order_by("created_at", "pk")
         )
 
-        return {
+        return decimals_to_str({
             **SupplierPaymentReadSerializer(payment).data,
             "amounts": get_payment_amounts(payment),
             "allocations": [serialize_allocation(a) for a in allocations],
@@ -258,7 +260,7 @@ class OwnerManagerPaymentView(OwnerManagerMixin, APIView):
                 serialize_reversal(r, unwinds_by_reversal.get(r.id, []))
                 for r in reversals
             ],
-        }
+        })
 
 
 class SupplierPaymentDetailAPIView(OwnerManagerPaymentView):
@@ -299,7 +301,7 @@ class SupplierPaymentReverseAPIView(OwnerManagerPaymentView):
         payment.refresh_from_db()
         return Response(
             {
-                "reversal": serialize_reversal(reversal, reversal.unwound),
+                "reversal": decimals_to_str(serialize_reversal(reversal, reversal.unwound)),
                 "payment": self.payment_detail(payment),
             },
             status=(
@@ -339,7 +341,7 @@ class SupplierPaymentAllocateAPIView(OwnerManagerPaymentView):
 
         return Response(
             {
-                "allocation": serialize_allocation(allocation),
+                "allocation": decimals_to_str(serialize_allocation(allocation)),
                 "payment": self.payment_detail(payment),
             },
             status=(
@@ -360,12 +362,12 @@ class SupplierBalanceAPIView(OwnerManagerPaymentView):
             ),
             pk=supplier_id,
         )
-        return Response({
+        return Response(decimals_to_str({
             "supplier_id": str(supplier.pk),
             **get_supplier_balance(
                 business_id=request.business.id, supplier_id=supplier.pk
             ),
-        })
+        }))
 
 
 class SupplierPaySummaryAPIView(OwnerManagerPaymentView):
@@ -396,4 +398,4 @@ class SupplierPaySummaryAPIView(OwnerManagerPaymentView):
         except DjangoValidationError as exc:
             raise_api_validation_error(exc)
 
-        return Response(summary)
+        return Response(decimals_to_str(summary))

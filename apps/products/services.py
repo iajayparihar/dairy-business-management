@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
@@ -79,6 +79,11 @@ def change_product_price(
         timezone.get_current_timezone()
     )
 
+    # A phone clock a little behind the server must not fail a "from now" change:
+    # up to 5 minutes early is read as now. Anything older is a real backdate.
+    if now - timedelta(minutes=5) <= effective_from < now:
+        effective_from = now
+
     # Do not allow retroactive price changes.
     if effective_from < now:
         raise ValidationError({
@@ -129,7 +134,7 @@ def change_product_price(
     # this service or an equivalent locking strategy.
     
     try:
-        product = Product.objects.select_for_update().get(
+        product = Product.objects.select_for_update(no_key=True).get(
             pk=product_id,
             business=business,
             is_active=True,

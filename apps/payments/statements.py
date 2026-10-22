@@ -1,3 +1,4 @@
+from apps.common.dates import parse_iso_date
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
@@ -55,7 +56,7 @@ def get_supplier_account_statement(
 
     if isinstance(start_date, str):
         try:
-            start_date = date.fromisoformat(start_date)
+            start_date = parse_iso_date(start_date)
         except ValueError:
             raise ValidationError(
                 {"start_date": "Use YYYY-MM-DD format."}
@@ -63,7 +64,7 @@ def get_supplier_account_statement(
 
     if isinstance(end_date, str):
         try:
-            end_date = date.fromisoformat(end_date)
+            end_date = parse_iso_date(end_date)
         except ValueError:
             raise ValidationError(
                 {"end_date": "Use YYYY-MM-DD format."}

@@ -15,11 +15,13 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Sum
 from django.utils import timezone
+from rest_framework import serializers
 
 from apps.billing.guards import assert_period_open
 from apps.billing.money import to_money
 from apps.businesses.models import Business, BusinessMembership
 from apps.businesses.services import require_business_membership
+from apps.common.serializers import clean_phone
 from apps.customers.models import Customer
 from apps.deliveries.services import (
     CLOCK_SKEW,
@@ -47,7 +49,16 @@ def _clean_reason(reason):
     reason = (reason or "").strip()
     if not reason:
         raise ValidationError({"reason": "A reason is required."})
+    if len(reason) > 500:
+        raise ValidationError({"reason": "At most 500 characters."})
     return reason
+
+
+def _clean_notes(notes):
+    notes = notes or ""
+    if len(notes) > 1000:
+        raise ValidationError({"notes": "At most 1000 characters."})
+    return notes
 
 
 def _lock_business(business_id):
@@ -356,7 +367,7 @@ def create_sale(
         raise ValidationError(
             {"client_ref": "A client_ref of 1 to 64 characters is required."}
         )
-    notes = notes or ""
+    notes = _clean_notes(notes)
     explicit_sold_at = None if sold_at is None else _clean_sold_at(sold_at)
     lines = _clean_lines(lines)
     if payment_mode == Sale.PaymentMode.CREDIT and not customer_id:
@@ -498,7 +509,7 @@ def correct_sale(
         )
     if payment_mode == Sale.PaymentMode.CREDIT and customer is None:
         raise ValidationError({"customer_id": "A credit sale needs a customer."})
-    notes = notes or ""
+    notes = _clean_notes(notes)
 
     # Active-only products for the replacement (the lock above allowed old
     # inactive ones so an old sale can still be cancelled).
@@ -526,10 +537,13 @@ def quick_create_customer(*, business_id, user, name, phone):
     """Counter shortcut (any member): name + phone, code CUST-<n> generated."""
     require_business_membership(user=user, business_id=business_id)
     name = (name or "").strip()
-    phone = (phone or "").strip()
     if not name or len(name) > 200:
         raise ValidationError({"name": "A name is required."})
-    if not phone or len(phone) > 20:
+    try:  # same phone rules as the customer API
+        phone = clean_phone(phone)
+    except serializers.ValidationError as exc:
+        raise ValidationError({"phone": exc.detail[0]})
+    if not phone:
         raise ValidationError({"phone": "A phone number is required."})
 
     business = _lock_business(business_id)

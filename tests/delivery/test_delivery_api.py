@@ -84,11 +84,21 @@ class DeliveryAPITests(TestCase):
                 "customer_id": str(self.customer.pk),
                 "product_id": str(self.product.pk),
                 "quantity": "2.000",
-                "line_total": "2.00",  # ignored: not an input field
+                "line_total": "2.00",  # not an input field: refused, never trusted
             },
             format="json",
         )
+        self.assertEqual(response.status_code, 400)
 
+        response = self.client.post(
+            self.url,
+            {
+                "customer_id": str(self.customer.pk),
+                "product_id": str(self.product.pk),
+                "quantity": "2.000",
+            },
+            format="json",
+        )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Decimal(response.data["unit_price"]), Decimal("50.00"))
         self.assertEqual(Decimal(response.data["line_total"]), Decimal("100.00"))

@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
+from tests.payment.helpers import DecimalClient
 
 from apps.businesses.models import BusinessMembership
 from apps.payments.models import SupplierPayment, SupplierPaymentAllocation
@@ -24,7 +25,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
         BusinessMembership.objects.create(
             business=self.business, user=self.staff, role="STAFF", is_active=True
         )
-        self.client = APIClient()
+        self.client = DecimalClient()
         self.client.force_authenticate(self.owner)
         self.url = (
             f"/api/v1/businesses/{self.business.id}/suppliers/"
@@ -45,7 +46,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
 
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data["period"]["days"], 5)
-        self.assertEqual(r.data["outstanding_amount"], D("1000.00"))
+        self.assertEqual(D(r.data["outstanding_amount"]), D("1000.00"))
         self.assertEqual(r.data["suggested_amount"], D("1000.00"))
         self.assertEqual(
             [p["purchase_number"] for p in r.data["period_purchases"]],
@@ -62,7 +63,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
         r = self.get()
 
         row = r.data["period_purchases"][0]
-        self.assertEqual((row["paid"], row["outstanding"]), (D("100.00"), D("400.00")))
+        self.assertEqual((D(row["paid"]), D(row["outstanding"])), (D("100.00"), D("400.00")))
         self.assertEqual(r.data["outstanding_amount"], D("400.00"))
         pay = r.data["period_payments"][0]
         self.assertEqual((pay["amount"], pay["allocated"], pay["unallocated"]),
@@ -72,7 +73,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
         self.pay(amount="400.00", paid_at=self.ago(3))  # advance, nothing to apply to
         self.purchase("P", "1000.00", self.ago(1))
         r = self.get()
-        self.assertEqual(r.data["outstanding_amount"], D("1000.00"))
+        self.assertEqual(D(r.data["outstanding_amount"]), D("1000.00"))
         self.assertEqual(r.data["available_credit"], D("400.00"))
         self.assertEqual(r.data["suggested_amount"], D("600.00"))
 
@@ -81,7 +82,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
         self.pay(amount="100.00", auto_allocate=True)
         SupplierPurchase.objects.filter(pk=p.pk).update(total_amount=D("60.00"))
         r = self.get()
-        self.assertEqual(r.data["outstanding_amount"], D("-40.00"))
+        self.assertEqual(D(r.data["outstanding_amount"]), D("-40.00"))
         self.assertEqual(r.data["suggested_amount"], D("0.00"))
         self.assertEqual(r.data["refund_due"], D("40.00"))
 
@@ -100,7 +101,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
         bal = get_supplier_balance(
             business_id=self.business.id, supplier_id=self.supplier.id
         )
-        self.assertEqual(r.data["outstanding_amount"], bal["outstanding_amount"])
+        self.assertEqual(D(r.data["outstanding_amount"]), bal["outstanding_amount"])
         self.assertEqual(r.data["available_credit"], bal["available_credit"])
         b = r.data["breakdown"]
         self.assertEqual(
@@ -123,7 +124,7 @@ class PaySummaryTests(ReversalMixin, TestCase):
             [p["purchase_number"] for p in r.data["period_purchases"]],
             ["FIRST", "LAST"],
         )
-        self.assertEqual(r.data["outstanding_amount"], D("40.00"))
+        self.assertEqual(D(r.data["outstanding_amount"]), D("40.00"))
         self.assertEqual(r.data["breakdown"]["outstanding_outside_period"], D("20.00"))
 
     def test_invalid_parameters_are_400(self):
@@ -142,25 +143,25 @@ class PaySummaryTests(ReversalMixin, TestCase):
             (SupplierPayment.objects.count(), SupplierPaymentAllocation.objects.count()),
         )
 
-        staff = APIClient()
+        staff = DecimalClient()
         staff.force_authenticate(self.staff)
         self.assertEqual(staff.get(self.url).status_code, 403)
 
-        outsider = APIClient()
+        outsider = DecimalClient()
         outsider.force_authenticate(self.other_owner)
         self.assertEqual(outsider.get(self.url).status_code, 403)
 
         # Own business URL, another business's supplier: 404.
         foreign = Supplier.objects.create(business=self.other, supplier_code="F", name="F")
-        other_client = APIClient()
+        other_client = DecimalClient()
         other_client.force_authenticate(self.other_owner)
         url = (f"/api/v1/businesses/{self.business.id}/suppliers/{foreign.id}/pay-summary/")
         self.assertEqual(other_client.get(url).status_code, 403)
-        own = APIClient()
+        own = DecimalClient()
         own.force_authenticate(self.owner)
         self.assertEqual(own.get(url).status_code, 404)
 
     def test_empty_supplier(self):
         r = self.get()
-        self.assertEqual(r.data["suggested_amount"], D("0.00"))
+        self.assertEqual(D(r.data["suggested_amount"]), D("0.00"))
         self.assertEqual(r.data["period_purchases"], [])

@@ -122,7 +122,7 @@ class StatementTests(BillFlow, TestCase):
     def test_opening_balance_carries_what_happened_before_the_start(self):
         self.deliver(self.cow, "5", ist(2026, 8, 10))         # 300
         self.finalize(self.draft(period=(date(2026, 8, 1), date(2026, 8, 31))))
-        today = timezone.now().date()
+        today = timezone.localdate()
         self.pay("100")
 
         statement = self.statement(start=today + timedelta(days=1))

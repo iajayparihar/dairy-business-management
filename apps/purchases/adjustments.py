@@ -58,6 +58,28 @@ def _price(value, field):
     return number
 
 
+def _same_request(earlier, purchase, kind, reason, lines, ids):
+    if (earlier.purchase_id, earlier.adjustment_type, earlier.reason) != (purchase.pk, kind, reason):
+        return False
+    stored = {str(l.purchase_line_id): l for l in earlier.lines.all()}
+    if set(stored) != set(ids):
+        return False
+    for item, line_id in zip(lines, ids):
+        row = stored[line_id]
+        try:
+            if kind == PurchaseAdjustment.Type.RETURN:
+                if row.quantity_before - row.quantity_after != _qty(item.get("quantity"), "quantity"):
+                    return False
+            else:
+                if item.get("quantity") is not None and row.quantity_after != _qty(item["quantity"], "quantity"):
+                    return False
+                if item.get("unit_price") is not None and row.unit_price_after != _price(item["unit_price"], "unit_price"):
+                    return False
+        except ValidationError:
+            return False
+    return True
+
+
 def _post(*, business_id, purchase_id, user, reason, lines, client_ref, kind):
     require_business_membership(
         user=user, business_id=business_id, allowed_roles=ALLOWED_ROLES,
@@ -76,17 +98,24 @@ def _post(*, business_id, purchase_id, user, reason, lines, client_ref, kind):
             "Only received purchases can be returned or corrected."
         )
 
-    client_ref = (client_ref or "").strip() or None
-    if client_ref and PurchaseAdjustment.objects.filter(
-        business_id=business_id, client_ref=client_ref
-    ).exists():
-        raise ValidationError(
-            {"client_ref": "This request was already submitted."}
-        )
-
     ids = [str(item["purchase_line_id"]) for item in lines]
     if len(set(ids)) != len(ids):
         raise ValidationError("A purchase line can appear only once.")
+
+    client_ref = (client_ref or "").strip() or None
+    earlier = (
+        PurchaseAdjustment.objects.filter(business_id=business_id, client_ref=client_ref)
+        .prefetch_related("lines").first()
+        if client_ref else None
+    )
+    if earlier is not None:
+        # Retry after a lost response: the same request returns the first result.
+        if not _same_request(earlier, purchase, kind, reason, lines, ids):
+            raise ValidationError(
+                {"client_ref": "This client_ref was already used for a different request."}
+            )
+        earlier.replayed = True
+        return earlier
 
     purchase_lines = {
         str(l.pk): l

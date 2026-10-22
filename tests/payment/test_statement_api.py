@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
+from tests.payment.helpers import DecimalClient
 
 from apps.businesses.models import BusinessMembership
 from apps.payments.selectors import get_supplier_balance
@@ -24,7 +25,7 @@ class StatementApiTests(ReversalMixin, TestCase):
             BusinessMembership.objects.create(
                 business=self.business, user=user, role=role, is_active=True
             )
-        self.client = APIClient()
+        self.client = DecimalClient()
         self.client.force_authenticate(self.owner)
         self.base = f"/api/v1/businesses/{self.business.id}/suppliers/{self.supplier.id}"
 
@@ -64,7 +65,7 @@ class StatementApiTests(ReversalMixin, TestCase):
             business_id=self.business.id, supplier_id=self.supplier.id
         )
         self.assertEqual(
-            full["closing_balance"],
+            D(full["closing_balance"]),
             bal["outstanding_amount"] - bal["available_credit"],
         )
 
@@ -116,7 +117,7 @@ class StatementApiTests(ReversalMixin, TestCase):
     def test_money_endpoints_are_owner_manager_only(self):
         urls = [f"{self.base}/statement/", f"{self.base}/statement/print/",
                 f"{self.base}/payments/"]
-        staff, outsider, mgr = APIClient(), APIClient(), APIClient()
+        staff, outsider, mgr = DecimalClient(), DecimalClient(), DecimalClient()
         staff.force_authenticate(self.staff)
         outsider.force_authenticate(self.other_owner)
         mgr.force_authenticate(self.manager)

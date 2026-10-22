@@ -1,8 +1,20 @@
 
 from django.core.exceptions import ImproperlyConfigured
+from django.db import IntegrityError
 from rest_framework import serializers
 
+from apps.common.serializers import RejectUnknownFieldsMixin, StrictDateTimeField
+from apps.products.guards import product_has_records
+
 from apps.products.models import Product, ProductCategory, ProductPrice
+
+
+class _BusinessMixin:
+    def _business(self):
+        if self.instance:
+            return self.instance.business
+        request = self.context.get("request")
+        return getattr(request, "business", None) if request else None
 
 
 def get_request_business(context):
@@ -17,7 +29,7 @@ def get_request_business(context):
     return business
 
 
-class ProductCategorySerializer(serializers.ModelSerializer):
+class ProductCategorySerializer(_BusinessMixin, RejectUnknownFieldsMixin, serializers.ModelSerializer):
     business = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
@@ -38,15 +50,26 @@ class ProductCategorySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def validate_name(self, value):
+        business = self._business()
+        if business is None:  # create() raises for a missing business context
+            return value
+        clash = ProductCategory.all_objects.filter(business=business, name__iexact=value.strip())
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("A category with this name already exists.")
+        return value
+
     def create(self, validated_data):
         business = get_request_business(self.context)
-        return ProductCategory.objects.create(
-            business=business,
-            **validated_data,
-        )
+        try:
+            return ProductCategory.objects.create(business=business, **validated_data)
+        except IntegrityError:  # parallel create of the same name
+            raise serializers.ValidationError({"name": "A category with this name already exists."})
 
 
-class ProductSerializer(serializers.ModelSerializer):
+class ProductSerializer(_BusinessMixin, RejectUnknownFieldsMixin, serializers.ModelSerializer):
     business = serializers.PrimaryKeyRelatedField(read_only=True)
 
     category = serializers.PrimaryKeyRelatedField(
@@ -92,13 +115,45 @@ class ProductSerializer(serializers.ModelSerializer):
                 )
             )
 
+    def validate_sku(self, value):
+        value = value.strip()
+        business = self._business()
+        if business is None:  # create() raises for a missing business context
+            return value.strip()
+        clash = Product.all_objects.filter(business=business, sku=value)
+        if self.instance:
+            if value == self.instance.sku:
+                return value
+            if product_has_records(self.instance):
+                raise serializers.ValidationError(
+                    "The SKU cannot change once the product has sales, stock or purchases."
+                )
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("This SKU is already used.")
+        return value
+
+    def validate(self, attrs):
+        # Stock is counted in the product's unit and only for tracked products:
+        # changing either after stock rows exist would corrupt the balance.
+        if self.instance:
+            changed = [
+                f for f in ("unit", "track_stock")
+                if f in attrs and attrs[f] != getattr(self.instance, f)
+            ]
+            if changed and product_has_records(self.instance):
+                raise serializers.ValidationError({
+                    f: "Cannot change once the product has sales, stock or purchases."
+                    for f in changed
+                })
+        return attrs
+
     def create(self, validated_data):
         business = get_request_business(self.context)
-
-        return Product.objects.create(
-            business=business,
-            **validated_data,
-        )
+        try:
+            return Product.objects.create(business=business, **validated_data)
+        except IntegrityError:  # parallel create of the same SKU
+            raise serializers.ValidationError({"sku": "This SKU is already used."})
 
 
 class ProductPriceSerializer(serializers.ModelSerializer):
@@ -115,10 +170,10 @@ class ProductPriceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class ProductPriceCreateSerializer(serializers.Serializer):
+class ProductPriceCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     price_type = serializers.ChoiceField(choices=ProductPrice.PriceType.values)
     unit_price = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=0
     )
     # Omitted means "from now". Backdating is refused by the service.
-    effective_from = serializers.DateTimeField(required=False)
+    effective_from = StrictDateTimeField(required=False)

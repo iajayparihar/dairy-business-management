@@ -9,6 +9,7 @@ from django.db.models import Sum
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
+from tests.payment.helpers import DecimalClient
 
 from apps.businesses.models import BusinessMembership
 from apps.payments.models import (
@@ -282,7 +283,7 @@ class ReversalApiTests(ReversalMixin, TestCase):
             BusinessMembership.objects.create(
                 business=self.business, user=user, role=role, is_active=True
             )
-        self.client = APIClient()
+        self.client = DecimalClient()
         self.client.force_authenticate(self.owner)
         self.base = f"/api/v1/businesses/{self.business.id}"
 
@@ -293,7 +294,7 @@ class ReversalApiTests(ReversalMixin, TestCase):
         r = self.client.post(self.url("allocate/"), {
             "purchase_id": str(self.p2.id), "amount": "600.00"}, format="json")
         self.assertEqual(r.status_code, 201, r.data)
-        self.assertEqual(r.data["payment"]["amounts"]["unallocated"], D("400.00"))
+        self.assertEqual(D(r.data["payment"]["amounts"]["unallocated"]), D("400.00"))
 
         # Retry of the same allocation is a 200 replay, not a duplicate.
         r = self.client.post(self.url("allocate/"), {
@@ -336,25 +337,25 @@ class ReversalApiTests(ReversalMixin, TestCase):
 
     def test_roles_and_tenant_isolation(self):
         body = {"amount": "10.00", "reason": "xx1"}
-        outsider = APIClient()
+        outsider = DecimalClient()
         outsider.force_authenticate(self.other_owner)
         self.assertEqual(outsider.post(self.url("reverse/"), body, format="json").status_code, 403)
         self.assertEqual(outsider.get(self.url()).status_code, 403)
 
         # Own business URL with a foreign payment id: 404, no leak.
-        other_client = APIClient()
+        other_client = DecimalClient()
         other_client.force_authenticate(self.other_owner)
         foreign = (f"/api/v1/businesses/{self.other.id}/payments/"
                    f"{self.pay_obj.id}/")
         self.assertEqual(other_client.get(foreign).status_code, 404)
         self.assertEqual(other_client.post(foreign + "reverse/", body, format="json").status_code, 404)
 
-        staff = APIClient()
+        staff = DecimalClient()
         staff.force_authenticate(self.staff)
         self.assertEqual(staff.post(self.url("reverse/"), body, format="json").status_code, 403)
         self.assertEqual(staff.get(self.url()).status_code, 403)
 
-        mgr = APIClient()
+        mgr = DecimalClient()
         mgr.force_authenticate(self.manager)
         self.assertEqual(mgr.post(self.url("reverse/"), body, format="json").status_code, 201)
         self.assertEqual(SupplierPaymentReversal.objects.count(), 1)
@@ -363,9 +364,9 @@ class ReversalApiTests(ReversalMixin, TestCase):
         url = f"{self.base}/suppliers/{self.supplier.id}/balance/"
         r = self.client.get(url)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data["outstanding_amount"], D("1000.00"))
+        self.assertEqual(D(r.data["outstanding_amount"]), D("1000.00"))
         self.assertEqual(r.data["available_credit"], D("1000.00"))
-        staff = APIClient()
+        staff = DecimalClient()
         staff.force_authenticate(self.staff)
         self.assertEqual(staff.get(url).status_code, 403)
 

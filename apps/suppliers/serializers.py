@@ -1,10 +1,18 @@
 
+from django.db import IntegrityError
 from rest_framework import serializers
+
+from apps.common.serializers import (
+    RejectUnknownFieldsMixin,
+    clean_phone,
+    validate_party_code,
+)
+from apps.suppliers.guards import supplier_has_records
 
 from apps.suppliers.models import Supplier
 
 
-class SupplierSerializer(serializers.ModelSerializer):
+class SupplierSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
     business = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
@@ -30,16 +38,40 @@ class SupplierSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def create(self, validated_data):
+    def validate_phone(self, value):
+        return clean_phone(value)
+
+    def _business(self):
+        if self.instance:
+            return self.instance.business
         request = self.context.get("request")
         business = getattr(request, "business", None) if request else None
-
         if business is None:
+            raise serializers.ValidationError("An authorized business context is required.")
+        return business
+
+    def validate_supplier_code(self, value):
+        return validate_party_code(
+            model=Supplier,
+            business=self._business(),
+            field="supplier_code",
+            value=value,
+            instance=self.instance,
+            has_records=supplier_has_records,
+        )
+
+    def create(self, validated_data):
+        try:
+            return Supplier.objects.create(business=self._business(), **validated_data)
+        except IntegrityError:  # lost a race with a parallel create of the same code
             raise serializers.ValidationError(
-                "An authorized business context is required."
+                {"supplier_code": "This code is already used."}
             )
 
-        return Supplier.objects.create(
-            business=business,
-            **validated_data,
-        )
+    def update(self, instance, validated_data):
+        try:
+            return super().update(instance, validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"supplier_code": "This code is already used."}
+            )

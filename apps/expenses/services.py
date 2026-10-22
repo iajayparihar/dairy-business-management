@@ -42,6 +42,8 @@ def clean_reason(reason):
         raise ValidationError({
             "reason": f"Give a reason of at least {MIN_REASON_LENGTH} characters."
         })
+    if len(reason) > 500:
+        raise ValidationError({"reason": "At most 500 characters."})
     return reason
 
 

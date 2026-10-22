@@ -29,6 +29,14 @@ from apps.sales.services import (
 )
 
 
+
+def _clean_notes(notes):
+    notes = notes or ""
+    if len(notes) > 1000:
+        raise ValidationError({"notes": "At most 1000 characters."})
+    return notes
+
+
 def _lock_all(business, product_ids, *, require_active=True):
     """_lock_products, with an error keyed to this API's fields."""
     try:
@@ -202,7 +210,7 @@ def create_batch(
         raise ValidationError(
             {"client_ref": "A client_ref of 1 to 64 characters is required."}
         )
-    notes = notes or ""
+    notes = _clean_notes(notes)
     explicit_at = _clean_at(produced_at)
     inputs, outputs = _clean_sides(inputs, outputs)
 
@@ -331,5 +339,5 @@ def correct_batch(
     return _insert_batch(
         business=business, products=products, user=user, inputs=inputs,
         outputs=outputs, produced_at=old.produced_at, client_ref=None,
-        notes=notes or "", replaces=old, enforce_window=False,
+        notes=_clean_notes(notes), replaces=old, enforce_window=False,
     )

@@ -1,12 +1,16 @@
 
 from rest_framework import serializers
 from decimal import Decimal
+from django.utils import timezone
+from datetime import timedelta
+
+from apps.common.serializers import RejectUnknownFieldsMixin, StrictDateTimeField
 from apps.payments.models import SupplierPayment
 
 
-class SupplierPaymentCreateSerializer(serializers.Serializer):
+class SupplierPaymentCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     payment_number = serializers.CharField(max_length=50, trim_whitespace=True)
-    paid_at = serializers.DateTimeField()
+    paid_at = StrictDateTimeField()
     amount = serializers.DecimalField(
         max_digits=14,
         decimal_places=2,
@@ -34,10 +38,9 @@ class SupplierPaymentCreateSerializer(serializers.Serializer):
     )
 
     def validate_paid_at(self, value):
-        if value.utcoffset() is None:
-            raise serializers.ValidationError(
-                "Provide an ISO-8601 timestamp with a timezone."
-            )
+        # never in the future (5 minutes of phone-clock skew allowed)
+        if value > timezone.now() + timedelta(minutes=5):
+            raise serializers.ValidationError("The payment date cannot be in the future.")
         return value
 
     def validate_amount(self, value):
@@ -76,7 +79,7 @@ class SupplierPaymentReadSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class PaymentReverseSerializer(serializers.Serializer):
+class PaymentReverseSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     # Omit amount to reverse everything that is left of the payment.
     amount = serializers.DecimalField(
         max_digits=14,
@@ -92,7 +95,7 @@ class PaymentReverseSerializer(serializers.Serializer):
     )
 
 
-class PaymentAllocateSerializer(serializers.Serializer):
+class PaymentAllocateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     purchase_id = serializers.UUIDField()
     amount = serializers.DecimalField(
         max_digits=14,

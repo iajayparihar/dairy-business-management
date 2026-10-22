@@ -10,6 +10,7 @@ from rest_framework.response import Response
 
 from apps.businesses.models import BusinessMembership
 from apps.businesses.permissions import IsBusinessMember
+from apps.common.pagination import StandardPagination
 from apps.suppliers.models import Supplier, SupplierMilkRate
 from apps.suppliers.services import create_supplier_milk_rate
 from apps.suppliers.api_serializers import (
@@ -51,6 +52,8 @@ class SupplierMilkRateListCreateAPIView(
     SupplierMilkRatePermissionMixin,
     generics.ListCreateAPIView,
 ):
+    pagination_class = StandardPagination
+
     def get_queryset(self):
         supplier = self.get_supplier()
 
