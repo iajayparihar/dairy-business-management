@@ -195,3 +195,16 @@ Reports were strong (owner / manager only, salary hidden, flat query counts, CSV
 - **Customer bill** (`apps/billing`): deliveries and shop credit-sale lines cancelled or corrected inside the bill's period are listed with their reason, marked `cancelled`, `counted_in_total: false`, and never charged. A draft reads them live; **finalize snapshots them** (new immutable table `CustomerBillCancelledLine`, migration `billing.0005_bill_cancelled_lines`). Totals, balance, allocations and `audit_bills` ignore them. The PDF (English and Hindi) has a grey section "Cancelled / corrected entries (not charged, shown for transparency)". `totals.cancelled_lines` and `totals.cancelled_not_charged` summarise them. Tests: `tests/billing/test_cancelled_lines.py`.
 - **Supplier statement** (`apps/payments/statements.py`): a cancelled milk can appears as a `MILK_CANCELLED` row with `counted: false`, zero debit and credit, its original `amount`, the cancel reason and "replaced by MILK-<new can>"; the balance never moves for it. The print view greys it and says "was X, not counted". Tests: `StatementShowsWrongAndRightQA` in `tests/purchases/test_rate_correction_qa.py`.
 - Reference form: the statement uses `MILK-<can number>` for both the cancelled and the live row (the mirror purchase number).
+
+## Auth gaps from the mobile wireframe review (23 Oct 2026)
+
+| Item | Result | Status |
+|---|---|---|
+| `GET auth/me/` missing (mobile shop picker) | Added; tests `tests/users/test_me_and_phone.py`. | FIXED |
+| Staff without email could never reset a password | Owner-issued one-time code; staff list / create / role / deactivate. Tests `tests/users/test_staff_management.py`. | FIXED |
+| Owner of shop A could take over an account that also opens shop B | Reset code refused for people active in another shop. | FIXED (by design) |
+| Phones free text, duplicates possible, usernames case-sensitive although login lookup ignores case | `+91` normalization, unique when set, case-insensitive unique username (migrations `users.0004`, `0005`). | FIXED |
+| Supplier delete | Already existed with guard; only the app screen was missing. | NOTE |
+| No `preferred_language` on the user | Not built; app keeps language on the phone for now. | OPEN |
+| `require_business_membership` does not check `Business.is_deleted` | A soft-deleted but still active shop stays reachable. `/me/` hides it. Decide whether to enforce in the permission. | OPEN |
+

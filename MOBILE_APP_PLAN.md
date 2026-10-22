@@ -62,8 +62,8 @@ Same working rules as CLAUDE.md: plan per step → owner approval → tests → 
 
 | # | Change | Detail |
 |---|--------|--------|
-| B0 | **Phone format now, OTP later** | Normalize and validate `User.phone_number` to E.164 `+91XXXXXXXXXX` (serializer validation + reversible data migration for existing rows, run separately from the schema migration) and a unique constraint on non-empty phones, so OTP (M11) plugs in without data cleanup. Also start **TRAI DLT** registration with an SMS provider now (weeks of lead time). |
-| B1 | `GET /api/v1/auth/me/` | User (id, name, phone, email, preferred_language) + active memberships `[{business_id, business_name, role, timezone, bill_language}]`. Own memberships only; soft-deleted / inactive hidden. |
+| B0 | ✅ DONE (23 Oct 2026) **Phone format now, OTP later** | Normalize and validate `User.phone_number` to E.164 `+91XXXXXXXXXX` (serializer validation + reversible data migration for existing rows, run separately from the schema migration) and a unique constraint on non-empty phones, so OTP (M11) plugs in without data cleanup. Also start **TRAI DLT** registration with an SMS provider now (weeks of lead time). |
+| B1 | ✅ DONE (23 Oct 2026; no `preferred_language` yet) `GET /api/v1/auth/me/` | User (id, name, phone, email, preferred_language) + active memberships `[{business_id, business_name, role, timezone, bill_language}]`. Own memberships only; soft-deleted / inactive hidden. |
 | B2 | `GET /api/v1/app-config/` (public, CDN-cacheable 5 min) | `min_supported_build`, `latest_build`, `maintenance {on, message_en, message_hi}`, `features {flag: bool}`, `support_phone`. Kill switch and force update for the whole fleet. |
 | B3 | OpenAPI schema audit | Every view has correct request / response schemas and enums; CI fails on schema warnings; schema diff check in CI flags breaking changes. |
 | B4 | Request id + structured logs | `X-Request-ID` (client sends, server echoes / generates), JSON logs, Sentry with the id. |

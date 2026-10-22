@@ -1,13 +1,36 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models.functions import Lower
+
+from .phone import normalize_phone, validate_phone
 
 
 class User(AbstractUser):
+    # Stored as +91XXXXXXXXXX (see phone.py); unique when not blank.
     phone_number = models.CharField(
         max_length=15,
         blank=True,
         default="",
+        validators=[validate_phone],
     )
+
+    class Meta(AbstractUser.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=["phone_number"],
+                condition=~models.Q(phone_number=""),
+                name="user_phone_unique_when_set",
+            ),
+            # resolve_user() matches usernames case-insensitively
+            models.UniqueConstraint(Lower("username"), name="user_username_ci_unique"),
+        ]
+
+    def save(self, *args, **kwargs):
+        fields = kwargs.get("update_fields")
+        if fields is None or "phone_number" in fields:  # login's last_login save must never fail
+            validate_phone(self.phone_number)
+            self.phone_number = normalize_phone(self.phone_number)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.username

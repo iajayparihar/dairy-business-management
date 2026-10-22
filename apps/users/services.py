@@ -19,6 +19,7 @@ from rest_framework_simplejwt.token_blacklist.models import (
 )
 
 from .models import PasswordResetOTP
+from .phone import normalize_phone
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -69,15 +70,18 @@ def _hash(user, code):
 
 
 def resolve_user(identifier):
-    """Active user matching username or email exactly once, else None."""
+    """Active user matching username, email or phone exactly once, else None."""
     identifier = (identifier or "").strip()
     if not identifier:
         return None
-    users = list(
-        User.objects.filter(is_active=True).filter(
-            Q(username__iexact=identifier) | Q(email__iexact=identifier)
-        )[:2]
-    )
+    match = Q(username__iexact=identifier) | Q(email__iexact=identifier)
+    try:
+        phone = normalize_phone(identifier)
+    except ValueError:
+        phone = ""
+    if phone:
+        match |= Q(phone_number=phone)
+    users = list(User.objects.filter(is_active=True).filter(match)[:2])
     return users[0] if len(users) == 1 else None
 
 
@@ -91,6 +95,29 @@ def revoke_user_tokens(user):
         ],
         ignore_conflicts=True,
     )
+
+
+def _new_otp(locked_user, now):
+    """Retire the live code, create a fresh one. Caller holds the user row lock."""
+    PasswordResetOTP.objects.filter(user=locked_user, used_at__isnull=True).update(
+        used_at=now
+    )
+    code = f"{secrets.randbelow(10**6):06d}"
+    otp = PasswordResetOTP.objects.create(
+        user=locked_user,
+        code_hash=_hash(locked_user, code),
+        expires_at=now
+        + timedelta(minutes=settings.PASSWORD_RESET_OTP_TTL_MINUTES),
+    )
+    return code, otp
+
+
+def issue_code_for_user(user):
+    """Reset code handed to a person by their owner (no email needed). -> (code, expires_at)."""
+    with transaction.atomic():
+        locked = User.objects.select_for_update().get(pk=user.pk)
+        code, otp = _new_otp(locked, timezone.now())
+    return code, otp.expires_at
 
 
 def issue_otp(identifier):
@@ -107,16 +134,9 @@ def issue_otp(identifier):
             user=locked, created_at__gt=now - OTP_RESEND_COOLDOWN
         ).exists():
             return
-        PasswordResetOTP.objects.filter(user=locked, used_at__isnull=True).update(
-            used_at=now
-        )
-        code = f"{secrets.randbelow(10**6):06d}"
         ttl = settings.PASSWORD_RESET_OTP_TTL_MINUTES
-        otp_id = PasswordResetOTP.objects.create(
-            user=locked,
-            code_hash=_hash(locked, code),
-            expires_at=now + timedelta(minutes=ttl),
-        ).pk
+        code, otp = _new_otp(locked, now)
+        otp_id = otp.pk
         send_email(
             "Your password reset code",
             f"Your OTP is {code}. It expires in {ttl} minutes. "

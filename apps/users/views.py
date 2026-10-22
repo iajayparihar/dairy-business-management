@@ -37,6 +37,7 @@ from . import services
 from .serializers import (
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
+    MeSerializer,
     ResetPasswordSerializer,
 )
 
@@ -222,3 +223,11 @@ class LogoutView(TokenBlacklistView):
             except Exception:  # refresh token is already blacklisted: do not fail logout
                 logger.exception("Could not revoke access tokens of the session")
         return response
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: MeSerializer})
+    def get(self, request):
+        return Response(MeSerializer(request.user).data)

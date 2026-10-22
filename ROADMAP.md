@@ -201,6 +201,9 @@ Client constraints: phone or small tablet at the counter; very simple; delivery 
 
 ## Open questions for the client
 
+- Staff who work in two shops: an owner cannot issue a reset code for them (account takeover risk). Is "reset by email only" fine, or should a person be able to join a second shop by invite (planned with M11)?
+- Staff accounts have no email or phone requirement (username only). Require a phone for staff once OTP login ships?
+
 - Can the delivery boy record cash collected at the door, or only the owner / manager?
 - Discounts, round-off, or forgiving small balances: any rule?
 - Any required bill / receipt number format (e.g. a printed receipt book)?

@@ -518,6 +518,16 @@ All auth endpoints live under `/api/v1/auth/`. The API is JWT-only (`Authorizati
 - **A failed send still returns 200.** If no OTP arrives, read the server log (`Email 'Your password reset code' failed`).
 - **Throttles** (per client IP / user): login 10/min, forgot 5/hour, reset 10/hour, change 10/hour. Counters live in the Django cache.
 - Weak passwords are refused with 400 (length, common, numeric-only, similar to the username) and the OTP stays usable.
+- **Reset by phone number**: the reset identifier may be a username, email or `+91` phone. The code is still only emailed; staff without email get a code from their owner (below).
+
+### Staff management and `/auth/me/` (23 Oct 2026)
+
+- `GET /api/v1/auth/me/`: the signed-in user plus own active memberships (`business_id`, `business_name`, `role`, `timezone`, `bill_language`). Inactive memberships, inactive or deleted shops are hidden; a superuser gets an empty list. The app calls it after login and again after any 403 (role may have changed).
+- `businesses/<id>/staff/` (GET list with `is_active`, `role`, `search`; POST create), `staff/<membership_id>/` (PATCH `role`, `is_active`), `staff/<membership_id>/password-reset-code/` (POST). OWNER and MANAGER only, reads included. Owner manages MANAGER and STAFF, manager manages STAFF; OWNER rows and a person's own row are never changed through the API (ownership stays in admin, so the last-owner rule cannot be hit). Rows carry `can_manage` and `can_reset_password` for the viewer so the app can hide buttons.
+- Create makes a login with **no password** and returns a one-time `setup_code` (shown once, stored only as a hash, valid `PASSWORD_RESET_OTP_TTL_MINUTES`). The person opens "Forgot password > I have a code", enters username or phone, the code and a new password. The same endpoint `password-reset-code/` is the "forgot password" help for staff without email.
+- **A reset code is refused** when the person also works in another active shop, is a Django staff/superuser, or is inactive, so one owner can never take over an account that opens another shop's data. Such people reset by email.
+- Phones: stored as `+91XXXXXXXXXX`, unique when not blank (`user_phone_unique_when_set`); usernames are unique ignoring case. Migration `users.0004` (data) normalizes existing rows and blanks unparseable or duplicate numbers (prints each change); `users.0005` adds the constraints. Throttle `staff_manage` 30/hour on create and reset-code.
+- Suppliers: `DELETE suppliers/<id>/` already soft-deletes and is refused once the supplier has milk, purchases or payments; the app shows Delete only when there are none, otherwise Make inactive.
 
 ### Email setup (Gmail SMTP)
 
