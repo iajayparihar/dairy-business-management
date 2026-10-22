@@ -30,12 +30,34 @@ class BusinessScopedCustomerAPIViewMixin:
         return super().get_permissions()
 
 
+def with_phone_warning(response, customer):
+    """Saving a shared phone number is allowed, but tell the user who already has it."""
+    if customer.phone:
+        others = Customer.objects.filter(
+            business_id=customer.business_id, phone=customer.phone
+        ).exclude(pk=customer.pk).order_by("name", "customer_code")[:5]
+        if others:
+            response.data["warnings"] = [{
+                "field": "phone",
+                "message": "This phone number is already used by another customer.",
+                "customers": [
+                    {"id": str(o.pk), "customer_code": o.customer_code, "name": o.name}
+                    for o in others
+                ],
+            }]
+    return response
+
+
 class CustomerListCreateAPIView(
     BusinessScopedCustomerAPIViewMixin,
     generics.ListCreateAPIView,
 ):
     serializer_class = CustomerSerializer
     pagination_class = StandardPagination
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        return with_phone_warning(response, Customer.objects.get(pk=response.data["id"]))
 
     def get_queryset(self):
         params = self.request.query_params
@@ -82,6 +104,10 @@ class CustomerDetailAPIView(
             Customer.objects.all(),
             self.request.business,
         )
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return with_phone_warning(response, Customer.objects.get(pk=response.data["id"]))
 
     def perform_destroy(self, instance):
         if customer_has_records(instance):

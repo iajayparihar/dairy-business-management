@@ -274,3 +274,46 @@ class RunRaceQA(Base, TransactionTestCase):
         [t.join() for t in ts]
         self.assertNotIn(500, codes, codes)
         self.assertEqual(Delivery.objects.filter(status="DELIVERED").count(), 1)
+
+
+@FAST
+class RouteUpdateQA(Base, TestCase):
+    def setUp(self):
+        self.make()
+        self.rid = self.setup_route()
+        self.url = self.u("route-detail", self.rid)
+
+    def patch(self, body, user=None):
+        return self.as_(user or self.manager).patch(self.url, body, format="json")
+
+    def test_rename_reassign_and_unassign(self):
+        r = self.patch({"name": "Sector 5 Morning", "assigned_to": str(self.m_boy2.pk)})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["name"], r.json()["assigned_to"]), ("Sector 5 Morning", str(self.m_boy2.pk)))
+        self.assertIsNone(self.patch({"assigned_to": None}).json()["assigned_to"])
+
+    def test_validation_and_roles(self):
+        for body in ({"name": ""}, {"name": "x" * 101}, {"assigned_to": UNKNOWN}, {"is_active": "maybe"}, {"bogus": 1}):
+            self.assertEqual(self.patch(body).status_code, 400, str(body))
+        self.assertEqual(self.patch({"name": "x"}, self.boy).status_code, 403)
+        self.assertEqual(self.as_(self.manager).patch(self.u("route-detail", UNKNOWN), {"name": "x"}, format="json").status_code, 404)
+
+    def test_duplicate_name_is_400_but_own_name_is_fine(self):
+        self.as_(self.manager).post(self.u("route-list-create"), {"name": "South"}, format="json")
+        self.assertEqual(self.patch({"name": "south"}).status_code, 400)
+        self.assertEqual(self.patch({"name": "NORTH"}).status_code, 200)  # same route, new case
+
+    def test_deactivate_needs_closed_runs_and_hides_route(self):
+        self.start()
+        self.assertEqual(self.patch({"is_active": False}).status_code, 400)
+        for c in self.cust:
+            self.entry(self.boy, c, items=self.basket())
+        self.as_(self.boy).post(self.u("run-close", self.run_id))
+        self.assertEqual(self.patch({"is_active": False}).status_code, 200)
+        listed = lambda q="": [r["id"] for r in self.as_(self.manager).get(self.u("route-list-create") + q).json()]
+        self.assertNotIn(self.rid, listed())
+        self.assertIn(self.rid, listed("?is_active=all"))
+        self.assertEqual(self.as_(self.manager).get(self.u("route-list-create"), {"is_active": "x"}).status_code, 400)
+        self.assertEqual(self.as_(self.manager).post(self.u("run-list-start"), {"route_id": self.rid}, format="json").status_code in (400, 404), True)
+        self.assertEqual(self.patch({"is_active": True}).status_code, 200)
+        self.assertIn(self.rid, listed())

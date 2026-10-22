@@ -92,6 +92,35 @@ def create_route(*, business_id, user, name, assigned_to=None):
 
 
 @transaction.atomic
+def update_route(*, business_id, route_id, user, **changes):
+    """Rename, reassign (null = unassign) or (de)activate a route. Past runs are untouched."""
+    _member(user, business_id, MANAGE_ROLES)
+    route = Route.objects.select_for_update().get(pk=route_id, business_id=business_id)
+
+    if "name" in changes:
+        name = (changes["name"] or "").strip()
+        if not name:
+            raise ValidationError({"name": "A route name is required."})
+        if Route.objects.filter(business_id=business_id, name__iexact=name).exclude(
+            pk=route.pk
+        ).exists():
+            raise ValidationError({"name": "A route with this name already exists."})
+        route.name = name
+    if "assigned_to" in changes:
+        route.assigned_to = _assignee(business_id, changes["assigned_to"])
+    if "is_active" in changes:
+        if changes["is_active"] is False and RouteRun.objects.filter(
+            route=route, status=RouteRun.Status.OPEN
+        ).exists():
+            raise ValidationError({
+                "is_active": "This route has an open run. Close it before deactivating the route."
+            })
+        route.is_active = changes["is_active"]
+    route.save()
+    return route
+
+
+@transaction.atomic
 def set_route_customers(*, business_id, route_id, user, customer_ids):
     """Replace the ordered customer list of a route."""
     _member(user, business_id, MANAGE_ROLES)

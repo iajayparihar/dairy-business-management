@@ -314,3 +314,34 @@ class MilkConcurrencyQA(Base, TransactionTestCase):
         [t.join() for t in ts]
         self.assertNotIn(500, [s for _, s in out], out)
         self.assertEqual(MilkCollection.objects.filter(status="RECORDED").count() <= 1, True)
+
+
+@FAST
+class MilkFatRangeQA(Base, TestCase):
+    def test_fat_outside_env_range_is_refused_inside_is_ok(self):
+        for fat in ("4.99", "0.5", "45", "20.01", "100"):
+            r = self.post(fat=fat)
+            self.assertEqual(r.status_code, 400, fat)
+            self.assertIn("fat", r.json())
+        for fat in ("5", "5.00", "6.5", "20", "20.00"):
+            self.assertEqual(self.post(fat=fat).status_code, 201, fat)
+
+    def test_range_follows_settings(self):
+        from decimal import Decimal
+        with self.settings(MILK_FAT_MIN=Decimal("3"), MILK_FAT_MAX=Decimal("12")):
+            self.assertEqual(self.post(fat="4").status_code, 201)
+            self.assertEqual(self.post(fat="13").status_code, 400)
+
+    def test_cow_is_unaffected_and_correction_checks_the_new_fat(self):
+        self.assertEqual(self.post(milk_type="COW", fat=None).status_code, 201)
+        c = self.post().json()
+        d = f"{self.url}{c['id']}/correct/"
+        self.assertEqual(self.api(self.owner).post(d, {"reason": "typo", "litres": "10", "fat": "90"}, format="json").status_code, 400)
+        self.assertEqual(self.api(self.owner).post(d, {"reason": "weighed", "litres": "11"}, format="json").status_code, 200)
+
+    def test_old_entry_with_low_fat_can_still_get_a_litres_only_correction(self):
+        from decimal import Decimal
+        c = self.post().json()
+        MilkCollection.objects.filter(pk=c["id"]).update(fat=Decimal("3.00"))  # recorded before the rule
+        r = self.api(self.owner).post(f"{self.url}{c['id']}/correct/", {"reason": "litres", "litres": "12"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)

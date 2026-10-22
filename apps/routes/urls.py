@@ -6,6 +6,7 @@ app_name = "routes"
 
 urlpatterns = [
     path("routes/", views.RouteListCreateView.as_view(), name="route-list-create"),
+    path("routes/<uuid:pk>/", views.RouteDetailView.as_view(), name="route-detail"),
     path("routes/<uuid:pk>/customers/", views.RouteCustomersView.as_view(), name="route-customers"),
     path("standing-orders/", views.StandingOrderListCreateView.as_view(), name="standing-order-list-create"),
     path("standing-orders/<uuid:pk>/", views.StandingOrderDetailView.as_view(), name="standing-order-detail"),

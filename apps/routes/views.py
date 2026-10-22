@@ -14,6 +14,7 @@ from apps.routes.serializers import (
     RouteCreateSerializer,
     RouteCustomersSerializer,
     RouteSerializer,
+    RouteUpdateSerializer,
     RunSerializer,
     RunStartSerializer,
     StandingOrderInputSerializer,
@@ -54,7 +55,13 @@ class RoutesView(DeliveryViewMixin, APIView):
 class RouteListCreateView(RoutesView):
     def get(self, request, business_id):
         membership = self.get_membership(request, business_id)
-        routes = Route.objects.filter(business_id=business_id, is_active=True)
+        routes = Route.objects.filter(business_id=business_id)
+        # managers can list inactive routes (?is_active=false or all) to reactivate them
+        flag = request.query_params.get("is_active", "true").lower()
+        if flag not in ("true", "false", "all"):
+            raise serializers.ValidationError({"is_active": "Use true, false or all."})
+        if flag != "all" or membership.role not in MANAGE_ROLES:
+            routes = routes.filter(is_active=flag != "false")
         if membership.role not in MANAGE_ROLES:
             routes = routes.filter(assigned_to=membership)
         return Response(RouteSerializer(routes, many=True).data)
@@ -67,6 +74,17 @@ class RouteListCreateView(RoutesView):
             business_id=business_id, user=request.user, **s.validated_data,
         )
         return Response(RouteSerializer(route).data, status=status.HTTP_201_CREATED)
+
+
+class RouteDetailView(RoutesView):
+    def patch(self, request, business_id, pk):
+        s = RouteUpdateSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        route = self.run(
+            services.update_route,
+            business_id=business_id, route_id=pk, user=request.user, **s.validated_data,
+        )
+        return Response(RouteSerializer(route).data)
 
 
 class RouteCustomersView(RoutesView):

@@ -178,3 +178,14 @@ Reports were strong (owner / manager only, salary hidden, flat query counts, CSV
 | X2 | `milk-balance` and `closing-stock` silently ignored unknown query params (a typo returned the wrong report with a 200). Now 400, like the other reports. | Low | FIXED |
 | N11 | Test `test_opening_balance_carries_what_happened_before_the_start` failed between 00:00 and 05:30 IST (it mixed the UTC date with the business date). Test fixed to use `timezone.localdate()`; no product bug. | Low | FIXED |
 | N12 | The Django `TIME_ZONE` is Asia/Kolkata and every business also has its own `timezone`. For all-India shops that is fine; a business outside India works because day ranges use `Business.timezone`. No change. | — | NOTE |
+
+## Owner decisions on the OPEN questions (22 Oct 2026)
+
+| Question | Decision | Status |
+|---|---|---|
+| Fat limit (O3) | Buffalo fat must be between **5 and 20**, set in `.env` as `MILK_FAT_MIN` / `MILK_FAT_MAX` (restart after changing). A litres-only correction of an older entry keeps its recorded fat and is not re-checked. | DONE |
+| Route rename / deactivate (T3) | `PATCH routes/<id>/` (name, assigned_to or null, is_active). Deactivating needs the route's open runs closed; inactive routes show with `?is_active=false` or `all`. Past runs and deliveries are untouched. | DONE |
+| Expense categories (O4) | Owner and manager both create (as built). | DONE (no change) |
+| Shared phone (O1) | Allowed. The create / patch response carries `warnings[0].customers` (up to 5: id, code, name) when another customer of the business has the same number. | DONE |
+| Milk rate backdate (O2) | Owner-only correction of a past rate that re-prices the affected entries. Plan sent for approval. | PLAN |
+| One delivery per day (N7) | Allow several deliveries per customer, product, shift and day; `client_ref` guards double taps. Plan sent for approval. | PLAN |

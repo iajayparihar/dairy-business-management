@@ -23,6 +23,12 @@ class RouteCreateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     assigned_to = serializers.UUIDField(required=False, allow_null=True)
 
 
+class RouteUpdateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False)
+    assigned_to = serializers.UUIDField(required=False, allow_null=True)
+    is_active = serializers.BooleanField(required=False)
+
+
 class RouteCustomersSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     customers = serializers.ListField(child=serializers.UUIDField(), max_length=2000)
 

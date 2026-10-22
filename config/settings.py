@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import sys
+from decimal import Decimal
 from pathlib import Path
 import environ
 from datetime import timedelta
@@ -190,6 +191,9 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@localhost")
+# Allowed buffalo fat range (a typo such as 45 for 4.5 would pay ten times the amount).
+MILK_FAT_MIN = Decimal(env("MILK_FAT_MIN", default="5"))
+MILK_FAT_MAX = Decimal(env("MILK_FAT_MAX", default="20"))
 PASSWORD_RESET_OTP_TTL_MINUTES = env.int("PASSWORD_RESET_OTP_TTL_MINUTES", default=10)
 # Auth emails are sent from a background thread so the response time never reveals
 # whether an account exists. Tests send inline.

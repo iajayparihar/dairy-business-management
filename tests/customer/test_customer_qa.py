@@ -298,3 +298,39 @@ class CustomerRaceQA(Base, TransactionTestCase):
         [t.join() for t in ts]
         self.assertNotIn(500, codes, codes)
         self.assertEqual(codes.count(201), 1, codes)
+
+
+@FAST
+class SharedPhoneWarningQA(Base, TestCase):
+    def test_create_with_shared_phone_saves_and_warns_who_has_it(self):
+        self.post({"customer_code": "A1", "name": "Ramesh Dairy Stall", "phone": "98765 43210"})
+        r = self.post({"customer_code": "A2", "name": "Ramesh Sweets", "phone": "+919876543210"})
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertNotIn("warnings", r.json())  # +91 form is a different stored number
+        r = self.post({"customer_code": "A3", "name": "Ramesh Chai", "phone": "9876543210"})
+        w = r.json()["warnings"][0]
+        self.assertEqual((r.status_code, w["field"]), (201, "phone"))
+        self.assertEqual([c["name"] for c in w["customers"]], ["Ramesh Dairy Stall"])
+        self.assertEqual(Customer.objects.filter(phone="9876543210").count(), 2)
+
+    def test_no_warning_for_a_unique_phone_other_business_or_blank(self):
+        Customer.objects.create(business=self.other, customer_code="X", name="Theirs", phone="9000000001")
+        for phone in ("9000000001", "", "9000000002"):
+            r = self.post({"customer_code": f"U{abs(hash(phone)) % 1000}", "name": "n", "phone": phone})
+            self.assertEqual(r.status_code, 201)
+            self.assertNotIn("warnings", r.json(), phone)
+
+    def test_patch_to_a_shared_phone_warns_and_own_number_does_not(self):
+        a = self.mk("P1", "A", phone="9111111111")
+        b = self.mk("P2", "B", phone="9222222222")
+        d = f"{self.url}{b.pk}/"
+        r = self.api(self.owner).patch(d, {"phone": "9111111111"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["warnings"][0]["customers"][0]["customer_code"], "P1")
+        r = self.api(self.owner).patch(d, {"name": "B2"}, format="json")
+        self.assertEqual(r.status_code, 200)
+
+    def test_deleted_customer_is_not_reported(self):
+        self.mk("D1", "Gone", phone="9333333333").delete()
+        r = self.post({"customer_code": "D2", "name": "New", "phone": "9333333333"})
+        self.assertNotIn("warnings", r.json())

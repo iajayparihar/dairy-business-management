@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
@@ -414,6 +415,14 @@ def create_milk_collection(
                 "fat": "Fat is required for buffalo milk."
             })
         fat = decimal_value(fat, "fat", Decimal("0.01"), 2)
+        # Range from .env (MILK_FAT_MIN / MILK_FAT_MAX): catches 45 typed for 4.5.
+        # A litres-only correction keeps the recorded fat, so it is not re-checked.
+        if replaces is None or fat != replaces.fat:
+            low, high = settings.MILK_FAT_MIN, settings.MILK_FAT_MAX
+            if not low <= fat <= high:
+                raise ValidationError({
+                    "fat": f"Fat must be between {low} and {high}. Check the decimal point."
+                })
 
     # Serialize collection creation within the business (also makes the
     # label sequence and the client_ref replay check race-free).
